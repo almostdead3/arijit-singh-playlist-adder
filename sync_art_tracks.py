@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
 CHANNEL_URL = "https://www.youtube.com/channel/UCtjpeRS40g7H8oquOSqkB3g/songs"  # Arijit Singh - Topic Songs
-BATCH_LIMIT = 50  # Adds 50 songs per run
+BATCH_LIMIT = 50  # Adds 50 songs per daily execution
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
@@ -18,34 +18,51 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def parse_netscape_cookies(cookies_raw):
-    """Parses Netscape cookie strings cleanly into Playwright-compatible dicts."""
+    """Parses Netscape cookies into Playwright-compatible dicts using explicitly formatted domains/urls."""
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("# "):
             continue
 
-        # Handle #HttpOnly_ lines
+        # Handle HttpOnly lines
         if line.startswith("#HttpOnly_"):
             line = line[len("#HttpOnly_"):]
 
         parts = line.split("\t")
         if len(parts) >= 7:
             domain = parts[0].strip()
-            # Playwright requires domains to not have leading dots in some protocol versions
-            if domain.startswith("."):
-                domain = domain[1:]
+            name = parts[5].strip()
+            value = parts[6].strip()
+            path = parts[1].strip() or "/"
 
-            cookie_dict = {
-                "name": parts[5].strip(),
-                "value": parts[6].strip(),
-                "domain": domain,
-                "path": parts[1].strip() or "/",
-                "secure": parts[3].strip().upper() == "TRUE"
-            }
-            
-            # Skip empty or malformed entries
-            if cookie_dict["name"] and cookie_dict["value"]:
+            # Only process cookies belonging to youtube.com or google.com
+            if "youtube.com" not in domain and "google.com" not in domain:
+                continue
+
+            # Ensure proper domain formatting for Playwright
+            if not domain.startswith("."):
+                formatted_domain = f".{domain}"
+            else:
+                formatted_domain = domain
+
+            if name and value:
+                cookie_dict = {
+                    "name": name,
+                    "value": value,
+                    "domain": formatted_domain,
+                    "path": path,
+                    "secure": parts[3].strip().upper() == "TRUE"
+                }
+                
+                # Expiration parsing
+                try:
+                    exp = float(parts[4].strip())
+                    if exp > 0:
+                        cookie_dict["expires"] = exp
+                except ValueError:
+                    pass
+
                 cookies.append(cookie_dict)
                 
     return cookies
@@ -61,14 +78,25 @@ def main():
     added_tracks = load_added_tracks()
     cookies = parse_netscape_cookies(cookies_raw)
 
-    print(f"Parsed {len(cookies)} valid cookies.")
+    print(f"Parsed {len(cookies)} valid YouTube cookies.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1280, 'height': 800})
         
-        # Inject cleaned cookies
-        context.add_cookies(cookies)
+        # Inject cleaned cookies safely
+        try:
+            context.add_cookies(cookies)
+            print("Cookies injected successfully!")
+        except Exception as e:
+            print(f"Warning during context.add_cookies: {e}")
+            # Fallback: Add cookies individually to bypass single broken entries
+            for c in cookies:
+                try:
+                    context.add_cookies([c])
+                except Exception:
+                    continue
+
         page = context.new_page()
 
         print("Navigating to Arijit Singh Topic Songs...")
