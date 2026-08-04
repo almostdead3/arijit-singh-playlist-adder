@@ -4,7 +4,7 @@ import tempfile
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
-BATCH_LIMIT = 20
+BATCH_LIMIT = 2000
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
