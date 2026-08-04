@@ -4,7 +4,6 @@ import tempfile
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
-BATCH_LIMIT = 2000
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
@@ -47,7 +46,6 @@ def fetch_all_arijit_tracks(ytmusic):
     video_ids = []
     seen = set()
 
-    # Correct Official YouTube Channel ID
     CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
 
     print("Fetching tracks from Arijit Singh's official channel...")
@@ -55,7 +53,6 @@ def fetch_all_arijit_tracks(ytmusic):
     try:
         artist_info = ytmusic.get_artist(CHANNEL_ID)
         
-        # 1. Grab tracks directly from top results on profile
         if "songs" in artist_info and "results" in artist_info["songs"]:
             for song in artist_info["songs"]["results"]:
                 v_id = song.get("videoId")
@@ -63,7 +60,6 @@ def fetch_all_arijit_tracks(ytmusic):
                     seen.add(v_id)
                     video_ids.append(v_id)
 
-        # 2. Extract albums, singles, and expanded sections
         sections = ["albums", "singles", "videos", "featured"]
         browse_targets = []
 
@@ -86,7 +82,6 @@ def fetch_all_arijit_tracks(ytmusic):
                                 except Exception:
                                     continue
 
-        # 3. Pull deep list contents using pagination parameters
         for browse_id, params in browse_targets:
             try:
                 full_list = ytmusic.get_artist_albums(browse_id, params)
@@ -104,7 +99,6 @@ def fetch_all_arijit_tracks(ytmusic):
     except Exception as e:
         print(f"Artist profile retrieval warning: {e}")
 
-    # 4. Fallback search bundle to ensure completeness across multi-language tracks
     if len(video_ids) < 100:
         print("Running comprehensive search supplement...")
         fallback_queries = [
@@ -185,6 +179,7 @@ def main():
 
     if not target_playlist_id:
         print(f"Error: Could not find any playlist named '{target_playlist_name}' in your account.")
+        print("Tip: Make sure the playlist exists in your library and your account owns it.")
         return
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
@@ -199,24 +194,22 @@ def main():
 
     added_tracks = load_added_tracks()
     pending = [v for v in video_ids if v not in added_tracks]
-    print(f"Pending tracks remaining: {len(pending)}")
+    print(f"Pending tracks remaining to add: {len(pending)}")
 
     if not pending:
         print("All tracks are up to date!")
         return
 
-    batch = pending[:BATCH_LIMIT]
-    
-    # Add items to playlist
+    # Add all pending items at once (no limit)
     try:
-        response = ytmusic.add_playlist_items(target_playlist_id, batch, duplicates=True)
+        response = ytmusic.add_playlist_items(target_playlist_id, pending, duplicates=True)
         status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
         print("API Batch Response status:", status)
         
         if status == "STATUS_FAILED":
-            print("Batch rejected by API! Attempting fallback: adding tracks individually...")
+            print("Bulk batch rejected by API! Attempting fallback: adding tracks individually...")
             added_count = 0
-            for v_id in batch:
+            for v_id in pending:
                 try:
                     res = ytmusic.add_playlist_items(target_playlist_id, [v_id], duplicates=True)
                     item_status = res.get("status", "Unknown") if isinstance(res, dict) else "STATUS_SUCCEEDED"
@@ -229,11 +222,11 @@ def main():
             save_added_tracks(added_tracks)
             print(f"Fallback complete: Successfully added {added_count} tracks individually to '{target_playlist_name}'!")
         else:
-            for v_id in batch:
+            for v_id in pending:
                 added_tracks.add(v_id)
                 
             save_added_tracks(added_tracks)
-            print(f"Successfully added {len(batch)} tracks to '{target_playlist_name}'!")
+            print(f"Successfully added all {len(pending)} pending tracks to '{target_playlist_name}'!")
 
     except Exception as e:
         print(f"Error adding tracks to playlist: {e}")
