@@ -3,7 +3,6 @@ import json
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
-AUTH_FILE = "browser_auth.json"
 ARIJIT_CHANNEL_ID = "UCtjpeRS40g7H8oquOSqkB3g"
 BATCH_LIMIT = 20
 
@@ -57,8 +56,8 @@ def main():
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
-    # Structure exact headers JSON format expected by ytmusicapi
-    auth_data = {
+    # Pass headers explicitly via the `headers` parameter or `setup` dict
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.5",
@@ -68,19 +67,21 @@ def main():
         "Cookie": cookie_header
     }
 
-    # Write temporary browser authentication file
-    with open(AUTH_FILE, "w") as f:
-        json.dump(auth_data, f)
-
     try:
-        ytmusic = YTMusic(AUTH_FILE)
+        # Initializing via headers parameter prevents OAuth check triggers
+        ytmusic = YTMusic(headers=json.dumps(headers))
         print("Successfully authenticated with YouTube Music API!")
+    except TypeError:
+        # Fallback for versions expecting dictionary format directly
+        try:
+            ytmusic = YTMusic(headers=headers)
+            print("Successfully authenticated with YouTube Music API (dict format)!")
+        except Exception as e:
+            print(f"Authentication Error: {e}")
+            return
     except Exception as e:
         print(f"Authentication Error: {e}")
         return
-    finally:
-        if os.path.exists(AUTH_FILE):
-            os.remove(AUTH_FILE)
 
     # Fetch User Playlists
     try:
