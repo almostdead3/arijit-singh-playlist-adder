@@ -4,7 +4,6 @@ from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
 CHANNEL_RELEASES_URL = "https://www.youtube.com/channel/UCtFOW7jJXChfFNoucRFqRmw/releases"
-PLAYLIST_ID = "PLBDwwXa5RQyQ"
 BATCH_LIMIT = 2000
 
 def load_added_tracks():
@@ -21,55 +20,58 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def parse_netscape_cookies(cookies_raw):
+    """Robust Netscape cookie parser for Playwright compatibility."""
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
-        if not line or line.startswith("# ") or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+        if not line or line.startswith("#") or line.startswith("!"):
             continue
-
-        if line.startswith("#HttpOnly_"):
-            line = line[len("#HttpOnly_"):]
 
         parts = line.split("\t")
         if len(parts) >= 7:
             domain = parts[0].strip()
+            path = parts[1].strip() or "/"
+            secure = parts[3].strip().upper() == "TRUE"
+            
+            try:
+                expires = float(parts[4].strip())
+            except ValueError:
+                expires = -1
+
             name = parts[5].strip()
             value = parts[6].strip()
-            path = parts[1].strip() or "/"
 
             if "youtube.com" not in domain and "google.com" not in domain:
                 continue
 
+            # Playwright requires domains starting with a dot to match subdomains properly
             formatted_domain = domain if domain.startswith(".") else f".{domain}"
 
-            if name and value:
-                cookie_dict = {
-                    "name": name,
-                    "value": value,
-                    "domain": formatted_domain,
-                    "path": path,
-                    "secure": parts[3].strip().upper() == "TRUE"
-                }
-                
-                try:
-                    exp = float(parts[4].strip())
-                    if exp > 0:
-                        cookie_dict["expires"] = exp
-                except ValueError:
-                    pass
+            cookie_dict = {
+                "name": name,
+                "value": value,
+                "domain": formatted_domain,
+                "path": path,
+                "secure": secure
+            }
+            
+            if expires > 0:
+                cookie_dict["expires"] = expires
 
-                cookies.append(cookie_dict)
+            cookies.append(cookie_dict)
     return cookies
 
 def main():
+    playlist_id = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
-    if not cookies_raw:
-        print("Error: Missing YT_COOKIES environment variable.")
+
+    if not playlist_id or not cookies_raw:
+        print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
         return
 
     added_tracks = load_added_tracks()
     cookies = parse_netscape_cookies(cookies_raw)
-    print(f"Parsed {len(cookies)} valid YouTube cookies.")
+    print(f"Parsed {len(cookies)} valid YouTube cookies for Playwright injection.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -101,7 +103,7 @@ def main():
         try:
             page.wait_for_selector("a#video-title, a.yt-simple-endpoint", timeout=10000)
             print("Scrolling to load release items...")
-            for _ in range(25):  # Adjust range higher if you want to load more historical releases
+            for _ in range(25):
                 page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                 page.wait_for_timeout(2000)
         except Exception as e:
@@ -162,23 +164,23 @@ def main():
                 save_btn.click()
                 page.wait_for_timeout(1500)
 
-                playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{PLAYLIST_ID}'), ytd-playlist-add-to-option-renderer:has-text('{PLAYLIST_ID}')").first
+                playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{playlist_id}'), ytd-playlist-add-to-option-renderer:has-text('{playlist_id}')").first
                 
                 if playlist_option.is_visible():
                     playlist_option.click()
-                    print(f"Successfully added official Art Track {v_id} to playlist {PLAYLIST_ID}.")
+                    print(f"Successfully added official Art Track {v_id} to playlist {playlist_id}.")
                     added_tracks.add(v_id)
                     added_count += 1
                     page.wait_for_timeout(1000)
                 else:
-                    print(f"Could not locate playlist ID '{PLAYLIST_ID}' in the Save menu options.")
+                    print(f"Could not locate playlist ID '{playlist_id}' in the Save menu options.")
 
             except Exception as e:
                 print(f"Error processing track {v_id}: {e}")
                 continue
 
         save_added_tracks(added_tracks)
-        print(f"Batch completed. Successfully verified and added {added_count} official Art Tracks to your new playlist!")
+        print(f"Batch completed. Successfully verified and added {added_count} official Art Tracks to your playlist!")
         browser.close()
 
 if __name__ == "__main__":
