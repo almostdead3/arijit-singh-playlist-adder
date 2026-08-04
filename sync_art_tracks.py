@@ -56,30 +56,30 @@ def main():
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
-    # Form minimal raw header dictionary
-    headers_dict = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Content-Type": "application/json",
-        "X-Goog-AuthUser": "0",
-        "x-origin": "https://music.youtube.com",
-        "Cookie": cookie_header
-    }
-
-    # Pass headers dictionary directly as raw JSON string content
     try:
-        ytmusic = YTMusic(auth=json.dumps(headers_dict))
-        print("Successfully authenticated with YouTube Music API!")
+        # Initialize an unauthenticated instance first
+        ytmusic = YTMusic()
+        
+        # Inject user headers & cookies directly into the session
+        ytmusic.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Content-Type": "application/json",
+            "X-Goog-AuthUser": "0",
+            "x-origin": "https://music.youtube.com",
+            "Cookie": cookie_header
+        })
+        print("Successfully attached authentication cookies to session!")
     except Exception as e:
-        print(f"Authentication Error: {e}")
+        print(f"Authentication Setup Error: {e}")
         return
 
     # Fetch User Playlists
     try:
         playlists = ytmusic.get_user_playlists()
     except Exception as e:
-        print(f"Error fetching user playlists: {e}")
+        print(f"Error fetching user playlists (cookies may be expired): {e}")
         return
 
     target_playlist_id = None
