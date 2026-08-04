@@ -21,7 +21,6 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def extract_cookie_pairs(cookies_raw):
-    """Extracts name=value pairs for Playwright DOM injection."""
     pairs = []
     cookies_raw = cookies_raw.strip()
     
@@ -61,18 +60,29 @@ def main():
 
     added_tracks = load_added_tracks()
     cookie_pairs = extract_cookie_pairs(cookies_raw)
-
     added_count = 0
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
         context = browser.new_context(
             viewport={'width': 1280, 'height': 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            locale="en-US"
         )
+        
+        # Hide webdriver fingerprint from JavaScript execution
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         page = context.new_page()
         page.goto("https://www.youtube.com", wait_until="domcontentloaded")
+        
         for pair in cookie_pairs:
             try:
                 page.evaluate(f"document.cookie = '{pair}; domain=.youtube.com; path=/; secure; samesite=none'")
@@ -123,15 +133,15 @@ def main():
                 video_url = f"https://www.youtube.com/watch?v={v_id}"
                 print(f"[{i + 1}/{len(batch)}] Inspecting and adding track: {v_id}")
                 page.goto(video_url, wait_until="domcontentloaded")
-                page.wait_for_timeout(random.randint(2000, 3500))
+                page.wait_for_timeout(random.randint(2500, 4500))
 
-                signin_btn = page.locator("a[href*='accounts.google.com/ServiceLogin']").first
-                if signin_btn.is_visible():
-                    print("Session throttled, pausing briefly...")
-                    page.wait_for_timeout(5000)
-                    continue
+                # Handle potential cookie consent dialogs safely
+                consent_btn = page.locator("button:has-text('Accept all'), yt-button-renderer:has-text('Accept all')").first
+                if consent_btn.is_visible():
+                    consent_btn.click()
+                    page.wait_for_timeout(1500)
 
-                page.wait_for_selector("ytd-watch-metadata", timeout=5000)
+                page.wait_for_selector("ytd-watch-metadata", timeout=6000)
                 description = page.inner_text("ytd-watch-metadata")
                 
                 # Strict Art Track Check
