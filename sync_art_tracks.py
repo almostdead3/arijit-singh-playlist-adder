@@ -4,13 +4,16 @@ import time
 from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
-CHANNEL_URL = "https://www.youtube.com/channel/UCtjpeRS40g7H8oquOSqkB3g/songs"  # Arijit Singh - Topic Songs
-BATCH_LIMIT = 50  # Adds 50 songs per daily execution
+CHANNEL_URL = "https://www.youtube.com/channel/UCtjpeRS40g7H8oquOSqkB3g/songs"
+BATCH_LIMIT = 20
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return set(json.load(f))
+        try:
+            with open(STATE_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
     return set()
 
 def save_added_tracks(added_set):
@@ -18,14 +21,12 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def parse_netscape_cookies(cookies_raw):
-    """Parses Netscape cookies into Playwright-compatible dicts using explicitly formatted domains/urls."""
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("# "):
             continue
 
-        # Handle HttpOnly lines
         if line.startswith("#HttpOnly_"):
             line = line[len("#HttpOnly_"):]
 
@@ -36,15 +37,10 @@ def parse_netscape_cookies(cookies_raw):
             value = parts[6].strip()
             path = parts[1].strip() or "/"
 
-            # Only process cookies belonging to youtube.com or google.com
             if "youtube.com" not in domain and "google.com" not in domain:
                 continue
 
-            # Ensure proper domain formatting for Playwright
-            if not domain.startswith("."):
-                formatted_domain = f".{domain}"
-            else:
-                formatted_domain = domain
+            formatted_domain = domain if domain.startswith(".") else f".{domain}"
 
             if name and value:
                 cookie_dict = {
@@ -54,8 +50,6 @@ def parse_netscape_cookies(cookies_raw):
                     "path": path,
                     "secure": parts[3].strip().upper() == "TRUE"
                 }
-                
-                # Expiration parsing
                 try:
                     exp = float(parts[4].strip())
                     if exp > 0:
@@ -64,14 +58,13 @@ def parse_netscape_cookies(cookies_raw):
                     pass
 
                 cookies.append(cookie_dict)
-                
     return cookies
 
 def main():
-    playlist_id = os.environ.get("PLAYLIST_ID")
+    playlist_name = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
 
-    if not playlist_id or not cookies_raw:
+    if not playlist_name or not cookies_raw:
         print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
         return
 
@@ -82,15 +75,16 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         
-        # Inject cleaned cookies safely
         try:
             context.add_cookies(cookies)
             print("Cookies injected successfully!")
         except Exception as e:
             print(f"Warning during context.add_cookies: {e}")
-            # Fallback: Add cookies individually to bypass single broken entries
             for c in cookies:
                 try:
                     context.add_cookies([c])
@@ -100,9 +94,9 @@ def main():
         page = context.new_page()
 
         print("Navigating to Arijit Singh Topic Songs...")
-        page.goto(CHANNEL_URL, wait_until="networkidle")
+        page.goto(CHANNEL_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
 
-        # Fetch video URLs
         video_links = page.eval_on_selector_all(
             "a#video-title",
             "elements => elements.map(e => e.href)"
@@ -132,32 +126,48 @@ def main():
             try:
                 video_url = f"https://www.youtube.com/watch?v={v_id}"
                 print(f"[{added_count + 1}/{len(batch)}] Inspecting video: {v_id}")
-                page.goto(video_url, wait_until="networkidle")
+                page.goto(video_url, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
 
-                # Double check description to ensure pure Art Track
+                if page.locator("a[href*='accounts.google.com/ServiceLogin']").is_visible():
+                    print("Error: Cookies expired or invalid login session. Skipping.")
+                    break
+
+                page.wait_for_selector("ytd-watch-metadata", timeout=5000)
                 description = page.inner_text("ytd-watch-metadata")
+                
                 if "Provided to YouTube by" not in description and "Auto-generated by YouTube" not in description:
-                    print(f"Skipping {v_id}: Description does not match official Art Track metadata.")
+                    print(f"Skipping {v_id}: Not identified as an official Art Track.")
                     continue
 
-                # Trigger Save to playlist popup
-                page.click("button[aria-label*='Save to playlist']")
-                time.sleep(1.5)
+                save_btn = page.locator("button[aria-label*='Save to playlist']").first
+                if not save_btn.is_visible():
+                    more_btn = page.locator("button[aria-label='More actions']").first
+                    if more_btn.is_visible():
+                        more_btn.click()
+                        page.wait_for_timeout(1000)
 
-                # Select target playlist
-                page.click(f"tp-yt-paper-checkbox:has-text('{playlist_id}')")
-                time.sleep(1)
+                save_btn.click()
+                page.wait_for_timeout(2000)
 
-                added_tracks.add(v_id)
-                added_count += 1
-                print(f"Added {v_id} successfully.")
+                # Target playlist by its visible name text
+                playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{playlist_name}'), ytd-playlist-add-to-option-renderer:has-text('{playlist_name}')").first
+                
+                if playlist_option.is_visible():
+                    playlist_option.click()
+                    print(f"Successfully added {v_id} to playlist '{playlist_name}'.")
+                    added_tracks.add(v_id)
+                    added_count += 1
+                    page.wait_for_timeout(1000)
+                else:
+                    print(f"Could not find playlist matching '{playlist_name}' in Save menu.")
 
             except Exception as e:
-                print(f"Could not add {v_id}: {e}")
+                print(f"Could not process {v_id}: {e}")
                 continue
 
         save_added_tracks(added_tracks)
-        print(f"Run completed. Successfully added {added_count} Art Tracks today.")
+        print(f"Run completed. Added {added_count} Art Tracks in this run.")
         browser.close()
 
 if __name__ == "__main__":
