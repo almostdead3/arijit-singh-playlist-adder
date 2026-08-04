@@ -19,73 +19,36 @@ def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
 
-def parse_cookies_flexibly(cookies_raw):
-    """Handles both Netscape format and JSON format cookies robustly."""
-    cookies = []
+def extract_cookie_pairs(cookies_raw):
+    """Extracts name=value pairs cleanly from Netscape or JSON cookies."""
+    pairs = []
     cookies_raw = cookies_raw.strip()
     
-    # Try parsing as JSON first (in case the secret is stored as a JSON array)
     if cookies_raw.startswith("[") or cookies_raw.startswith("{"):
         try:
             data = json.loads(cookies_raw)
             if isinstance(data, list):
                 for item in data:
-                    if "name" in item and "value" in item and "domain" in item:
-                        cookies.append({
-                            "name": item["name"],
-                            "value": item["value"],
-                            "domain": item["domain"] if item["domain"].startswith(".") else f".{item['domain']}",
-                            "path": item.get("path", "/"),
-                            "secure": bool(item.get("secure", True))
-                        })
-                print(f"Successfully parsed {len(cookies)} cookies from JSON format.")
-                return cookies
-        except Exception as e:
-            print(f"JSON cookie parse attempt failed: {e}")
+                    if "name" in item and "value" in item:
+                        pairs.append(f"{item['name']}={item['value']}")
+                return pairs
+        except Exception:
+            pass
 
-    # Fallback to Netscape format parsing
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("!"):
             continue
-
         if line.startswith("#HttpOnly_"):
             line = line[len("#HttpOnly_"):]
 
         parts = line.split("\t")
         if len(parts) >= 7:
-            domain = parts[0].strip()
-            path = parts[1].strip() or "/"
-            secure_flag = parts[3].strip().upper() == "TRUE"
             name = parts[5].strip()
             value = parts[6].strip()
-
-            if "youtube.com" not in domain and "google.com" not in domain:
-                continue
-
-            if not name or not value:
-                continue
-
-            formatted_domain = domain if domain.startswith(".") else f".{domain}"
-
-            cookie_dict = {
-                "name": name,
-                "value": value,
-                "domain": formatted_domain,
-                "path": path,
-                "secure": secure_flag
-            }
-            
-            try:
-                expires = float(parts[4].strip())
-                if expires > 0:
-                    cookie_dict["expires"] = expires
-            except (ValueError, IndexError):
-                pass
-
-            cookies.append(cookie_dict)
-            
-    return cookies
+            if name and value:
+                pairs.append(f"{name}={value}")
+    return pairs
 
 def main():
     playlist_id = os.environ.get("PLAYLIST_ID")
@@ -96,8 +59,8 @@ def main():
         return
 
     added_tracks = load_added_tracks()
-    cookies = parse_cookies_flexibly(cookies_raw)
-    print(f"Total valid cookies ready for injection: {len(cookies)}")
+    cookie_pairs = extract_cookie_pairs(cookies_raw)
+    print(f"Extracted {len(cookie_pairs)} cookie pairs for browser injection.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -106,17 +69,28 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        added_cookie_count = 0
-        for c in cookies:
-            try:
-                context.add_cookies([c])
-                added_cookie_count += 1
-            except Exception as ex:
-                print(f"Failed cookie ({c.get('name')}): {ex}")
-                continue
-        print(f"Successfully injected {added_cookie_count} cookies into browser context.")
-
         page = context.new_page()
+
+        # Step 1: Open YouTube domain first so we have the correct security origin
+        print("Opening base YouTube domain to establish context...")
+        page.goto("https://www.youtube.com", wait_until="domcontentloaded")
+
+        # Step 2: Inject cookies directly via JavaScript document.cookie
+        print("Injecting cookies via JavaScript execution...")
+        injected_count = 0
+        for pair in cookie_pairs:
+            try:
+                # Set secure cookie string with domain scoping
+                page.evaluate(f"document.cookie = '{pair}; domain=.youtube.com; path=/; secure; samesite=none'")
+                injected_count += 1
+            except Exception:
+                continue
+        
+        print(f"Successfully injected {injected_count} cookies via DOM.")
+
+        # Reload page to apply authenticated session state
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
 
         print(f"Navigating to Arijit Singh's Official Releases: {CHANNEL_RELEASES_URL}")
         page.goto(CHANNEL_RELEASES_URL, wait_until="domcontentloaded")
