@@ -4,6 +4,7 @@ import tempfile
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
+BATCH_LIMIT = 2000
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
@@ -41,11 +42,12 @@ def netscape_to_cookie_header(cookies_raw):
 
     return "; ".join(cookie_pairs)
 
-def fetch_all_arijit_tracks(ytmusic):
-    """Directly scrapes tracks from Arijit Singh's official channel ID and comprehensive catalogs."""
+def fetch_arijit_tracks(ytmusic):
+    """Scrapes tracks from Arijit Singh's official channel releases and albums."""
     video_ids = []
     seen = set()
-
+    
+    # Official Channel ID corresponding to @Official_ArijitSingh
     CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
 
     print("Fetching tracks from Arijit Singh's official channel...")
@@ -53,70 +55,50 @@ def fetch_all_arijit_tracks(ytmusic):
     try:
         artist_info = ytmusic.get_artist(CHANNEL_ID)
         
-        if "songs" in artist_info and "results" in artist_info["songs"]:
-            for song in artist_info["songs"]["results"]:
-                v_id = song.get("videoId")
-                if v_id and v_id not in seen:
-                    seen.add(v_id)
-                    video_ids.append(v_id)
-
-        sections = ["albums", "singles", "videos", "featured"]
-        browse_targets = []
-
-        for section_key in sections:
-            if section_key in artist_info:
-                sec_data = artist_info[section_key]
-                if isinstance(sec_data, dict):
-                    if "browseId" in sec_data and "params" in sec_data:
-                        browse_targets.append((sec_data["browseId"], sec_data["params"]))
-                    elif "results" in sec_data:
-                        for item in sec_data["results"]:
-                            if "browseId" in item:
-                                try:
-                                    album_data = ytmusic.get_album(item["browseId"])
-                                    for track in album_data.get("tracks", []):
-                                        v_id = track.get("videoId")
-                                        if v_id and v_id not in seen:
+        # 1. Grab singles/albums/releases sections dynamically
+        sections_to_check = ["albums", "singles", "videos", "featured", "releases"]
+        for key in sections_to_check:
+            if key in artist_info and isinstance(artist_info[key], dict):
+                sec = artist_info[key]
+                if "browseId" in sec and "params" in sec:
+                    try:
+                        full_list = ytmusic.get_artist_albums(sec["browseId"], sec["params"])
+                        for entry in full_list:
+                            if "browseId" in entry:
+                                album_data = ytmusic.get_album(entry["browseId"])
+                                for track in album_data.get("tracks", []):
+                                    if "videoId" in track and track["videoId"]:
+                                        v_id = track["videoId"]
+                                        if v_id not in seen:
                                             seen.add(v_id)
                                             video_ids.append(v_id)
-                                except Exception:
-                                    continue
+                    except Exception as e:
+                        print(f"Pagination warning for section {key}: {e}")
+                elif "results" in sec:
+                    for item in sec["results"]:
+                        if "browseId" in item:
+                            try:
+                                album_data = ytmusic.get_album(item["browseId"])
+                                for track in album_data.get("tracks", []):
+                                    if "videoId" in track and track["videoId"]:
+                                        v_id = track["videoId"]
+                                        if v_id not in seen:
+                                            seen.add(v_id)
+                                            video_ids.append(v_id)
+                            except Exception:
+                                pass
 
-        for browse_id, params in browse_targets:
-            try:
-                full_list = ytmusic.get_artist_albums(browse_id, params)
-                for entry in full_list:
-                    if "browseId" in entry:
-                        album_content = ytmusic.get_album(entry["browseId"])
-                        for track in album_content.get("tracks", []):
-                            v_id = track.get("videoId")
-                            if v_id and v_id not in seen:
-                                seen.add(v_id)
-                                video_ids.append(v_id)
-            except Exception as e:
-                print(f"Section pagination warning: {e}")
-
-    except Exception as e:
-        print(f"Artist profile retrieval warning: {e}")
-
-    if len(video_ids) < 100:
-        print("Running comprehensive search supplement...")
-        fallback_queries = [
-            "Arijit Singh",
-            "Arijit Singh Hindi songs",
-            "Arijit Singh Bengali songs",
-            "Arijit Singh romantic hits"
-        ]
-        for query in fallback_queries:
-            try:
-                results = ytmusic.search(query=query, filter="songs", limit=150)
-                for song in results:
-                    v_id = song.get("videoId")
-                    if v_id and v_id not in seen:
+        # Also grab any top songs directly listed on the profile
+        if "songs" in artist_info and "results" in artist_info["songs"]:
+            for song in artist_info["songs"]["results"]:
+                if isinstance(song, dict) and "videoId" in song and song["videoId"]:
+                    v_id = song["videoId"]
+                    if v_id not in seen:
                         seen.add(v_id)
                         video_ids.append(v_id)
-            except Exception:
-                pass
+
+    except Exception as e:
+        print(f"Channel scraping warning: {e}")
 
     return video_ids
 
@@ -129,7 +111,6 @@ def main():
         return
 
     cookie_header = netscape_to_cookie_header(cookies_raw)
-
     if not cookie_header:
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
@@ -164,7 +145,6 @@ def main():
         if os.path.exists(temp_auth_path):
             os.remove(temp_auth_path)
 
-    # Fetch User Playlists
     try:
         playlists = ytmusic.get_library_playlists(limit=None)
     except Exception as e:
@@ -179,14 +159,12 @@ def main():
 
     if not target_playlist_id:
         print(f"Error: Could not find any playlist named '{target_playlist_name}' in your account.")
-        print("Tip: Make sure the playlist exists in your library and your account owns it.")
         return
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
 
-    # Fetch Catalog
-    video_ids = fetch_all_arijit_tracks(ytmusic)
-    print(f"Total tracks retrieved: {len(video_ids)}")
+    video_ids = fetch_arijit_tracks(ytmusic)
+    print(f"Total tracks retrieved from official channel: {len(video_ids)}")
 
     if not video_ids:
         print("No video IDs retrieved.")
@@ -194,22 +172,23 @@ def main():
 
     added_tracks = load_added_tracks()
     pending = [v for v in video_ids if v not in added_tracks]
-    print(f"Pending tracks remaining to add: {len(pending)}")
+    print(f"Pending tracks remaining: {len(pending)}")
 
     if not pending:
         print("All tracks are up to date!")
         return
 
-    # Add all pending items at once (no limit)
+    batch = pending[:BATCH_LIMIT]
+    
     try:
-        response = ytmusic.add_playlist_items(target_playlist_id, pending, duplicates=True)
+        response = ytmusic.add_playlist_items(target_playlist_id, batch, duplicates=True)
         status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
         print("API Batch Response status:", status)
         
         if status == "STATUS_FAILED":
-            print("Bulk batch rejected by API! Attempting fallback: adding tracks individually...")
+            print("Batch rejected by API! Attempting fallback: adding tracks individually...")
             added_count = 0
-            for v_id in pending:
+            for v_id in batch:
                 try:
                     res = ytmusic.add_playlist_items(target_playlist_id, [v_id], duplicates=True)
                     item_status = res.get("status", "Unknown") if isinstance(res, dict) else "STATUS_SUCCEEDED"
@@ -222,11 +201,11 @@ def main():
             save_added_tracks(added_tracks)
             print(f"Fallback complete: Successfully added {added_count} tracks individually to '{target_playlist_name}'!")
         else:
-            for v_id in pending:
+            for v_id in batch:
                 added_tracks.add(v_id)
                 
             save_added_tracks(added_tracks)
-            print(f"Successfully added all {len(pending)} pending tracks to '{target_playlist_name}'!")
+            print(f"Successfully added {len(batch)} tracks to '{target_playlist_name}'!")
 
     except Exception as e:
         print(f"Error adding tracks to playlist: {e}")
