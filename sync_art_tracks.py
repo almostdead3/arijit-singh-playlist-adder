@@ -1,9 +1,11 @@
 import os
 import json
-import tempfile
-from ytmusicapi import YTMusic
+import time
+from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
+CHANNEL_URL = "https://www.youtube.com/channel/UCtFOW7jJXChfFNoucRFqRmw/releases"
+PLAYLIST_ID = "PLBDwwXa5RQyQ"  # Your target playlist ID
 BATCH_LIMIT = 2000
 
 def load_added_tracks():
@@ -19,9 +21,8 @@ def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
 
-def netscape_to_cookie_header(cookies_raw):
-    """Converts raw Netscape cookies into a Cookie header string."""
-    cookie_pairs = []
+def parse_netscape_cookies(cookies_raw):
+    cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("# ") or (line.startswith("#") and not line.startswith("#HttpOnly_")):
@@ -35,70 +36,31 @@ def netscape_to_cookie_header(cookies_raw):
             domain = parts[0].strip()
             name = parts[5].strip()
             value = parts[6].strip()
+            path = parts[1].strip() or "/"
 
-            if "youtube.com" in domain or "google.com" in domain:
-                if name and value:
-                    cookie_pairs.append(f"{name}={value}")
+            if "youtube.com" not in domain and "google.com" not in domain:
+                continue
 
-    return "; ".join(cookie_pairs)
+            formatted_domain = domain if domain.startswith(".") else f".{domain}"
 
-def fetch_arijit_tracks(ytmusic):
-    """Directly scrapes tracks from Arijit Singh's official channel releases and albums."""
-    video_ids = []
-    seen = set()
-    
-    # Arijit Singh's Official Channel ID
-    CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
+            if name and value:
+                cookie_dict = {
+                    "name": name,
+                    "value": value,
+                    "domain": formatted_domain,
+                    "path": path,
+                    "secure": parts[3].strip().upper() == "TRUE"
+                }
+                
+                try:
+                    exp = float(parts[4].strip())
+                    if exp > 0:
+                        cookie_dict["expires"] = exp
+                except ValueError:
+                    pass
 
-    print("Fetching tracks from Arijit Singh's official channel releases...")
-
-    try:
-        artist_info = ytmusic.get_artist(CHANNEL_ID)
-        
-        # 1. Grab tracks directly from featured songs list on his profile
-        if "songs" in artist_info and "results" in artist_info["songs"]:
-            for song in artist_info["songs"]["results"]:
-                if isinstance(song, dict) and "videoId" in song and song["videoId"]:
-                    v_id = song["videoId"]
-                    if v_id not in seen:
-                        seen.add(v_id)
-                        video_ids.append(v_id)
-
-        # 2. Iterate through his releases/albums/singles sections
-        for key in ["albums", "singles", "videos", "featured", "releases"]:
-            if key in artist_info and isinstance(artist_info[key], dict):
-                sec = artist_info[key]
-                if "browseId" in sec and "params" in sec:
-                    try:
-                        full_list = ytmusic.get_artist_albums(sec["browseId"], sec["params"])
-                        for entry in full_list:
-                            if "browseId" in entry:
-                                album_data = ytmusic.get_album(entry["browseId"])
-                                for track in album_data.get("tracks", []):
-                                    if "videoId" in track and track["videoId"]:
-                                        v_id = track["videoId"]
-                                        if v_id not in seen:
-                                            seen.add(v_id)
-                                            video_ids.append(v_id)
-                    except Exception as e:
-                        print(f"Pagination warning for section {key}: {e}")
-                elif "results" in sec:
-                    for item in sec["results"]:
-                        if "browseId" in item:
-                            try:
-                                album_data = ytmusic.get_album(item["browseId"])
-                                for track in album_data.get("tracks", []):
-                                    if "videoId" in track and track["videoId"]:
-                                        v_id = track["videoId"]
-                                        if v_id not in seen:
-                                            seen.add(v_id)
-                                            video_ids.append(v_id)
-                            except Exception:
-                                pass
-    except Exception as e:
-        print(f"Official channel release scraping warning: {e}")
-
-    return video_ids
+                cookies.append(cookie_dict)
+    return cookies
 
 def main():
     cookies_raw = os.environ.get("YT_COOKIES")
@@ -106,93 +68,124 @@ def main():
         print("Error: Missing YT_COOKIES environment variable.")
         return
 
-    cookie_header = netscape_to_cookie_header(cookies_raw)
-    if not cookie_header:
-        print("Error: Could not extract valid cookies from YT_COOKIES.")
-        return
-
-    browser_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Content-Type": "application/json",
-        "X-Goog-AuthUser": "0",
-        "x-origin": "https://music.youtube.com",
-        "Cookie": cookie_header,
-        "authorization": "SAPISIDHASH 123456789_abcdef"
-    }
-
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as tmp:
-        json.dump(browser_headers, tmp)
-        temp_auth_path = tmp.name
-
-    try:
-        ytmusic = YTMusic(auth=temp_auth_path)
-        print("Successfully authenticated with YouTube Music API!")
-    except Exception as e:
-        print(f"Standard auth warning: {e}. Falling back to session headers...")
-        ytmusic = YTMusic()
-        ytmusic.auth = temp_auth_path
-        if hasattr(ytmusic, "_session"):
-            ytmusic._session.headers.update(browser_headers)
-        elif hasattr(ytmusic, "session"):
-            ytmusic.session.headers.update(browser_headers)
-    finally:
-        if os.path.exists(temp_auth_path):
-            os.remove(temp_auth_path)
-
-    # Use the direct playlist ID to avoid text lookup or masking issues
-    target_playlist_id = "PLIV4BTGhTGJQ"
-    print(f"Target Playlist ID set to: {target_playlist_id}")
-
-    # Fetch Tracks from Official Channel Releases
-    video_ids = fetch_arijit_tracks(ytmusic)
-    print(f"Total tracks retrieved: {len(video_ids)}")
-
-    if not video_ids:
-        print("No video IDs retrieved.")
-        return
-
     added_tracks = load_added_tracks()
-    pending = [v for v in video_ids if v not in added_tracks]
-    print(f"Pending tracks remaining: {len(pending)}")
+    cookies = parse_netscape_cookies(cookies_raw)
 
-    if not pending:
-        print("All tracks are up to date!")
-        return
+    print(f"Parsed {len(cookies)} valid YouTube cookies.")
 
-    batch = pending[:BATCH_LIMIT]
-    
-    # Add items to playlist
-    try:
-        response = ytmusic.add_playlist_items(target_playlist_id, batch, duplicates=True)
-        status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
-        print("API Batch Response status:", status)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         
-        if status == "STATUS_FAILED":
-            print("Batch rejected by API! Attempting fallback: adding tracks individually...")
-            added_count = 0
-            for v_id in batch:
-                try:
-                    res = ytmusic.add_playlist_items(target_playlist_id, [v_id], duplicates=True)
-                    item_status = res.get("status", "Unknown") if isinstance(res, dict) else "STATUS_SUCCEEDED"
-                    if item_status != "STATUS_FAILED":
-                        added_tracks.add(v_id)
-                        added_count += 1
-                except Exception as item_e:
-                    print(f"Failed to add track {v_id}: {item_e}")
-            
-            save_added_tracks(added_tracks)
-            print(f"Fallback complete: Successfully added {added_count} tracks individually!")
-        else:
-            for v_id in batch:
-                added_tracks.add(v_id)
-                
-            save_added_tracks(added_tracks)
-            print(f"Successfully added {len(batch)} tracks to playlist!")
+        # Inject cookies cleanly
+        if cookies:
+            try:
+                context.add_cookies(cookies)
+                print(f"Successfully injected {len(cookies)} cookies into browser context.")
+            except Exception as e:
+                print(f"Batch injection failed ({e}). Attempting individual injection...")
+                added_cookie_count = 0
+                for c in cookies:
+                    try:
+                        context.add_cookies([c])
+                        added_cookie_count += 1
+                    except Exception:
+                        continue
+                print(f"Successfully injected {added_cookie_count} cookies into browser context.")
 
-    except Exception as e:
-        print(f"Error adding tracks to playlist: {e}")
+        page = context.new_page()
+
+        print("Navigating to Arijit Singh's Official Releases...")
+        page.goto(CHANNEL_URL, wait_until="domcontentloaded")
+        
+        try:
+            page.wait_for_selector("a#video-title, a.yt-simple-endpoint", timeout=10000)
+            
+            # Scroll down repeatedly to load items from the releases page
+            print("Scrolling to load releases...")
+            for _ in range(15):
+                page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+                page.wait_for_timeout(2000)
+                
+        except Exception as e:
+            print(f"Notice: Waiting for initial selectors / scrolling timed out: {e}")
+
+        video_links = page.eval_on_selector_all(
+            "a[href*='/watch?v=']",
+            "elements => elements.map(e => e.href)"
+        )
+
+        video_ids = []
+        for link in video_links:
+            if "watch?v=" in link:
+                v_id = link.split("watch?v=")[1].split("&")[0]
+                if v_id not in video_ids:
+                    video_ids.append(v_id)
+
+        print(f"Total unique video entries found on official channel: {len(video_ids)}")
+
+        pending = [v for v in video_ids if v not in added_tracks]
+        print(f"Pending tracks remaining: {len(pending)}")
+
+        if not pending:
+            print("No pending tracks to add.")
+            browser.close()
+            return
+
+        batch = pending[:BATCH_LIMIT]
+        added_count = 0
+
+        for i, v_id in enumerate(batch):
+            try:
+                video_url = f"https://www.youtube.com/watch?v={v_id}"
+                print(f"[{i + 1}/{len(batch)}] Inspecting video: {v_id}")
+                page.goto(video_url, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+
+                signin_btn = page.locator("a[href*='accounts.google.com/ServiceLogin']").first
+                if signin_btn.is_visible():
+                    print("Error: Session expired or guest view active. Re-export your cookies.txt file.")
+                    break
+
+                page.wait_for_selector("ytd-watch-metadata", timeout=5000)
+                description = page.inner_text("ytd-watch-metadata")
+                
+                # Strict Art Track verification filter
+                if "Provided to YouTube by" not in description and "Auto-generated by YouTube" not in description:
+                    print(f"Skipping {v_id}: Not identified as an official Art Track.")
+                    continue
+
+                save_btn = page.locator("button[aria-label*='Save to playlist']").first
+                if not save_btn.is_visible():
+                    more_btn = page.locator("button[aria-label='More actions']").first
+                    if more_btn.is_visible():
+                        more_btn.click()
+                        page.wait_for_timeout(1000)
+
+                save_btn.click()
+                page.wait_for_timeout(2000)
+
+                playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{PLAYLIST_ID}'), ytd-playlist-add-to-option-renderer:has-text('{PLAYLIST_ID}')").first
+                
+                if playlist_option.is_visible():
+                    playlist_option.click()
+                    print(f"Successfully added {v_id} to playlist {PLAYLIST_ID}.")
+                    added_tracks.add(v_id)
+                    added_count += 1
+                    page.wait_for_timeout(1000)
+                else:
+                    print(f"Could not locate playlist ID '{PLAYLIST_ID}' in the Save menu options.")
+
+            except Exception as e:
+                print(f"Error processing {v_id}: {e}")
+                continue
+
+        save_added_tracks(added_tracks)
+        print(f"Batch completed. Successfully verified and added {added_count} official Art Tracks.")
+        browser.close()
 
 if __name__ == "__main__":
     main()
