@@ -20,43 +20,48 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def parse_netscape_cookies(cookies_raw):
-    """Robust Netscape cookie parser for Playwright compatibility."""
+    """Strict Netscape cookie parser designed to prevent Playwright validation errors."""
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("!"):
             continue
 
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+
         parts = line.split("\t")
         if len(parts) >= 7:
             domain = parts[0].strip()
             path = parts[1].strip() or "/"
-            secure = parts[3].strip().upper() == "TRUE"
-            
-            try:
-                expires = float(parts[4].strip())
-            except ValueError:
-                expires = -1
-
+            secure_flag = parts[3].strip().upper() == "TRUE"
             name = parts[5].strip()
             value = parts[6].strip()
 
             if "youtube.com" not in domain and "google.com" not in domain:
                 continue
 
-            # Playwright requires domains starting with a dot to match subdomains properly
+            if not name or not value:
+                continue
+
+            # Playwright requires domains starting with a dot
             formatted_domain = domain if domain.startswith(".") else f".{domain}"
 
+            # Only include the essential fields that Playwright accepts safely
             cookie_dict = {
                 "name": name,
                 "value": value,
                 "domain": formatted_domain,
                 "path": path,
-                "secure": secure
+                "secure": secure_flag
             }
             
-            if expires > 0:
-                cookie_dict["expires"] = expires
+            try:
+                expires = float(parts[4].strip())
+                if expires > 0:
+                    cookie_dict["expires"] = expires
+            except (ValueError, IndexError):
+                pass
 
             cookies.append(cookie_dict)
     return cookies
@@ -71,7 +76,7 @@ def main():
 
     added_tracks = load_added_tracks()
     cookies = parse_netscape_cookies(cookies_raw)
-    print(f"Parsed {len(cookies)} valid YouTube cookies for Playwright injection.")
+    print(f"Parsed {len(cookies)} clean YouTube cookies for Playwright injection.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -80,20 +85,15 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        if cookies:
+        # Inject cookies individually to gracefully bypass any single malformed cookie entry
+        added_cookie_count = 0
+        for c in cookies:
             try:
-                context.add_cookies(cookies)
-                print(f"Successfully injected {len(cookies)} cookies into browser context.")
-            except Exception as e:
-                print(f"Batch cookie injection failed ({e}). Attempting individual injection...")
-                added_cookie_count = 0
-                for c in cookies:
-                    try:
-                        context.add_cookies([c])
-                        added_cookie_count += 1
-                    except Exception:
-                        continue
-                print(f"Successfully injected {added_cookie_count} cookies into browser context.")
+                context.add_cookies([c])
+                added_cookie_count += 1
+            except Exception:
+                continue
+        print(f"Successfully injected {added_cookie_count} cookies into browser context.")
 
         page = context.new_page()
 
