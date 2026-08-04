@@ -57,26 +57,38 @@ def main():
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
-    # Generate proper browser headers for YTMusic setup
-    headers_raw = f"""User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
-Accept: */*
-Accept-Language: en-US,en;q=0.5
-Content-Type: application/json
-X-Goog-AuthUser: 0
-x-origin: https://music.youtube.com
-Cookie: {cookie_header}"""
+    # Modern ytmusicapi browser auth header schema
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Content-Type": "application/json",
+        "X-Goog-AuthUser": "0",
+        "x-origin": "https://music.youtube.com",
+        "Cookie": cookie_header
+    }
 
-    # Write temporary browser headers via YTMusic setup parser
+    # Write temporary JSON file with browser headers
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as tmp:
+        json.dump(browser_headers, tmp)
         temp_auth_path = tmp.name
 
     try:
-        YTMusic.setup(filepath=temp_auth_path, headers=headers_raw)
+        # Initialize YTMusic with browser JSON auth
         ytmusic = YTMusic(temp_auth_path)
         print("Successfully authenticated with YouTube Music API!")
     except Exception as e:
-        print(f"Authentication Error: {e}")
-        return
+        # If schema check triggers OAuth fallback, inject headers into session directly
+        try:
+            ytmusic = YTMusic()
+            if hasattr(ytmusic, "_session"):
+                ytmusic._session.headers.update(browser_headers)
+            elif hasattr(ytmusic, "session"):
+                ytmusic.session.headers.update(browser_headers)
+            print("Successfully authenticated via direct session header injection!")
+        except Exception as inner_e:
+            print(f"Authentication Error: {e} | Fallback Error: {inner_e}")
+            return
     finally:
         if os.path.exists(temp_auth_path):
             os.remove(temp_auth_path)
