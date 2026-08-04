@@ -43,40 +43,70 @@ def netscape_to_cookie_header(cookies_raw):
     return "; ".join(cookie_pairs)
 
 def fetch_arijit_tracks(ytmusic):
-    """Safely retrieves Arijit Singh tracks without triggering get_artist header key errors."""
+    """Directly scrapes tracks from Arijit Singh's official channel releases and albums."""
     video_ids = []
+    seen = set()
+    
+    # Arijit Singh's Official Channel ID
+    CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
 
-    # Method 1: Search specifically for songs by Arijit Singh
+    print("Fetching tracks from Arijit Singh's official channel releases...")
+
     try:
-        search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=100)
-        for song in search_results:
-            if isinstance(song, dict) and "videoId" in song and song["videoId"]:
-                video_ids.append(song["videoId"])
-    except Exception as e:
-        print(f"Search method warning: {e}")
+        artist_info = ytmusic.get_artist(CHANNEL_ID)
+        
+        # 1. Grab tracks directly from featured songs list on his profile
+        if "songs" in artist_info and "results" in artist_info["songs"]:
+            for song in artist_info["songs"]["results"]:
+                if isinstance(song, dict) and "videoId" in song and song["videoId"]:
+                    v_id = song["videoId"]
+                    if v_id not in seen:
+                        seen.add(v_id)
+                        video_ids.append(v_id)
 
-    # Method 2: Direct lookup via YouTube Music Top Tracks topic playlist for Arijit Singh
-    if not video_ids:
-        try:
-            topic_playlist = ytmusic.get_playlist("RDEMtjpeRS40g7H8oquOSqkB3g")
-            for track in topic_playlist.get("tracks", []):
-                if "videoId" in track and track["videoId"]:
-                    video_ids.append(track["videoId"])
-        except Exception as e:
-            print(f"Topic playlist lookup warning: {e}")
+        # 2. Iterate through his releases/albums/singles sections
+        for key in ["albums", "singles", "videos", "featured", "releases"]:
+            if key in artist_info and isinstance(artist_info[key], dict):
+                sec = artist_info[key]
+                if "browseId" in sec and "params" in sec:
+                    try:
+                        full_list = ytmusic.get_artist_albums(sec["browseId"], sec["params"])
+                        for entry in full_list:
+                            if "browseId" in entry:
+                                album_data = ytmusic.get_album(entry["browseId"])
+                                for track in album_data.get("tracks", []):
+                                    if "videoId" in track and track["videoId"]:
+                                        v_id = track["videoId"]
+                                        if v_id not in seen:
+                                            seen.add(v_id)
+                                            video_ids.append(v_id)
+                    except Exception as e:
+                        print(f"Pagination warning for section {key}: {e}")
+                elif "results" in sec:
+                    for item in sec["results"]:
+                        if "browseId" in item:
+                            try:
+                                album_data = ytmusic.get_album(item["browseId"])
+                                for track in album_data.get("tracks", []):
+                                    if "videoId" in track and track["videoId"]:
+                                        v_id = track["videoId"]
+                                        if v_id not in seen:
+                                            seen.add(v_id)
+                                            video_ids.append(v_id)
+                            except Exception:
+                                pass
+    except Exception as e:
+        print(f"Official channel release scraping warning: {e}")
 
     return video_ids
 
 def main():
-    target_playlist_name = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
-
-    if not target_playlist_name or not cookies_raw:
-        print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
+    if not cookies_raw:
+        print("Error: Missing YT_COOKIES environment variable.")
         return
 
     cookie_header = netscape_to_cookie_header(cookies_raw)
-
     if not cookie_header:
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
@@ -111,26 +141,11 @@ def main():
         if os.path.exists(temp_auth_path):
             os.remove(temp_auth_path)
 
-    # Fetch User Playlists
-    try:
-        playlists = ytmusic.get_library_playlists(limit=None)
-    except Exception as e:
-        print(f"Error fetching user playlists: {e}")
-        return
+    # Use the direct playlist ID to avoid text lookup or masking issues
+    target_playlist_id = "PLIV4BTGhTGJQ"
+    print(f"Target Playlist ID set to: {target_playlist_id}")
 
-    target_playlist_id = None
-    for pl in playlists:
-        if pl.get("title") == target_playlist_name:
-            target_playlist_id = pl.get("playlistId")
-            break
-
-    if not target_playlist_id:
-        print(f"Error: Could not find any playlist named '{target_playlist_name}' in your account.")
-        return
-
-    print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
-
-    # Fetch Artist Tracks
+    # Fetch Tracks from Official Channel Releases
     video_ids = fetch_arijit_tracks(ytmusic)
     print(f"Total tracks retrieved: {len(video_ids)}")
 
@@ -168,13 +183,13 @@ def main():
                     print(f"Failed to add track {v_id}: {item_e}")
             
             save_added_tracks(added_tracks)
-            print(f"Fallback complete: Successfully added {added_count} tracks individually to '{target_playlist_name}'!")
+            print(f"Fallback complete: Successfully added {added_count} tracks individually!")
         else:
             for v_id in batch:
                 added_tracks.add(v_id)
                 
             save_added_tracks(added_tracks)
-            print(f"Successfully added {len(batch)} tracks to '{target_playlist_name}'!")
+            print(f"Successfully added {len(batch)} tracks to playlist!")
 
     except Exception as e:
         print(f"Error adding tracks to playlist: {e}")
