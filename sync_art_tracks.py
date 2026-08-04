@@ -43,62 +43,27 @@ def netscape_to_cookie_header(cookies_raw):
     return "; ".join(cookie_pairs)
 
 def fetch_arijit_tracks(ytmusic):
-    """Scrapes tracks from Arijit Singh's official channel releases and albums."""
+    """Safely retrieves Arijit Singh tracks without triggering get_artist header key errors."""
     video_ids = []
-    seen = set()
-    
-    # Official Channel ID corresponding to @Official_ArijitSingh
-    CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
 
-    print("Fetching tracks from Arijit Singh's official channel...")
-
+    # Method 1: Search specifically for songs by Arijit Singh
     try:
-        artist_info = ytmusic.get_artist(CHANNEL_ID)
-        
-        # 1. Grab singles/albums/releases sections dynamically
-        sections_to_check = ["albums", "singles", "videos", "featured", "releases"]
-        for key in sections_to_check:
-            if key in artist_info and isinstance(artist_info[key], dict):
-                sec = artist_info[key]
-                if "browseId" in sec and "params" in sec:
-                    try:
-                        full_list = ytmusic.get_artist_albums(sec["browseId"], sec["params"])
-                        for entry in full_list:
-                            if "browseId" in entry:
-                                album_data = ytmusic.get_album(entry["browseId"])
-                                for track in album_data.get("tracks", []):
-                                    if "videoId" in track and track["videoId"]:
-                                        v_id = track["videoId"]
-                                        if v_id not in seen:
-                                            seen.add(v_id)
-                                            video_ids.append(v_id)
-                    except Exception as e:
-                        print(f"Pagination warning for section {key}: {e}")
-                elif "results" in sec:
-                    for item in sec["results"]:
-                        if "browseId" in item:
-                            try:
-                                album_data = ytmusic.get_album(item["browseId"])
-                                for track in album_data.get("tracks", []):
-                                    if "videoId" in track and track["videoId"]:
-                                        v_id = track["videoId"]
-                                        if v_id not in seen:
-                                            seen.add(v_id)
-                                            video_ids.append(v_id)
-                            except Exception:
-                                pass
-
-        # Also grab any top songs directly listed on the profile
-        if "songs" in artist_info and "results" in artist_info["songs"]:
-            for song in artist_info["songs"]["results"]:
-                if isinstance(song, dict) and "videoId" in song and song["videoId"]:
-                    v_id = song["videoId"]
-                    if v_id not in seen:
-                        seen.add(v_id)
-                        video_ids.append(v_id)
-
+        search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=100)
+        for song in search_results:
+            if isinstance(song, dict) and "videoId" in song and song["videoId"]:
+                video_ids.append(song["videoId"])
     except Exception as e:
-        print(f"Channel scraping warning: {e}")
+        print(f"Search method warning: {e}")
+
+    # Method 2: Direct lookup via YouTube Music Top Tracks topic playlist for Arijit Singh
+    if not video_ids:
+        try:
+            topic_playlist = ytmusic.get_playlist("RDEMtjpeRS40g7H8oquOSqkB3g")
+            for track in topic_playlist.get("tracks", []):
+                if "videoId" in track and track["videoId"]:
+                    video_ids.append(track["videoId"])
+        except Exception as e:
+            print(f"Topic playlist lookup warning: {e}")
 
     return video_ids
 
@@ -111,6 +76,7 @@ def main():
         return
 
     cookie_header = netscape_to_cookie_header(cookies_raw)
+
     if not cookie_header:
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
@@ -145,6 +111,7 @@ def main():
         if os.path.exists(temp_auth_path):
             os.remove(temp_auth_path)
 
+    # Fetch User Playlists
     try:
         playlists = ytmusic.get_library_playlists(limit=None)
     except Exception as e:
@@ -163,8 +130,9 @@ def main():
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
 
+    # Fetch Artist Tracks
     video_ids = fetch_arijit_tracks(ytmusic)
-    print(f"Total tracks retrieved from official channel: {len(video_ids)}")
+    print(f"Total tracks retrieved: {len(video_ids)}")
 
     if not video_ids:
         print("No video IDs retrieved.")
@@ -180,6 +148,7 @@ def main():
 
     batch = pending[:BATCH_LIMIT]
     
+    # Add items to playlist
     try:
         response = ytmusic.add_playlist_items(target_playlist_id, batch, duplicates=True)
         status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
