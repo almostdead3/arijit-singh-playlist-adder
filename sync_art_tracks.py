@@ -20,7 +20,7 @@ def save_added_tracks(added_set):
         json.dump(list(added_set), f, indent=2)
 
 def netscape_to_cookie_header(cookies_raw):
-    """Converts raw Netscape cookies into a Cookie header string for ytmusicapi."""
+    """Converts raw Netscape cookies into a Cookie header string."""
     cookie_pairs = []
     for line in cookies_raw.splitlines():
         line = line.strip()
@@ -50,35 +50,36 @@ def main():
         print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
         return
 
-    # Convert Netscape format to Cookie header string
     cookie_header = netscape_to_cookie_header(cookies_raw)
 
     if not cookie_header:
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
+    # Create headers dictionary
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Content-Type": "application/json",
+        "X-Goog-AuthUser": "0",
+        "x-origin": "https://music.youtube.com",
+        "Cookie": cookie_header
+    }
+
     try:
-        # Pass headers dict with cookie string to YTMusic
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Cookie": cookie_header
-        }
+        # Pass headers formatted explicitly as a JSON string
         ytmusic = YTMusic(auth=json.dumps(headers))
         print("Successfully authenticated with YouTube Music API!")
-    except Exception:
-        # Fallback to direct raw string if JSON setup fails
-        try:
-            ytmusic = YTMusic(auth=cookie_header)
-            print("Successfully authenticated via direct cookie header!")
-        except Exception as e:
-            print(f"Authentication Error: {e}")
-            return
+    except Exception as e:
+        print(f"Authentication Error: {e}")
+        return
 
     # Fetch User Playlists
     try:
         playlists = ytmusic.get_user_playlists()
     except Exception as e:
-        print(f"Error fetching user playlists (Check if cookies are valid): {e}")
+        print(f"Error fetching user playlists: {e}")
         return
 
     target_playlist_id = None
