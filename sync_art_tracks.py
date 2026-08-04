@@ -42,28 +42,87 @@ def netscape_to_cookie_header(cookies_raw):
 
     return "; ".join(cookie_pairs)
 
-def fetch_arijit_tracks(ytmusic):
-    """Safely retrieves Arijit Singh tracks without triggering get_artist header key errors."""
+def fetch_all_arijit_tracks(ytmusic):
+    """Directly scrapes tracks from Arijit Singh's official channel ID and comprehensive catalogs."""
     video_ids = []
+    seen = set()
 
-    # Method 1: Search specifically for songs by Arijit Singh
+    # Correct Official YouTube Channel ID
+    CHANNEL_ID = "UCtFOW7jJXChfFNoucRFqRmw"
+
+    print("Fetching tracks from Arijit Singh's official channel...")
+
     try:
-        search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=100)
-        for song in search_results:
-            if isinstance(song, dict) and "videoId" in song and song["videoId"]:
-                video_ids.append(song["videoId"])
-    except Exception as e:
-        print(f"Search method warning: {e}")
+        artist_info = ytmusic.get_artist(CHANNEL_ID)
+        
+        # 1. Grab tracks directly from top results on profile
+        if "songs" in artist_info and "results" in artist_info["songs"]:
+            for song in artist_info["songs"]["results"]:
+                v_id = song.get("videoId")
+                if v_id and v_id not in seen:
+                    seen.add(v_id)
+                    video_ids.append(v_id)
 
-    # Method 2: Direct lookup via YouTube Music Top Tracks topic playlist for Arijit Singh
-    if not video_ids:
-        try:
-            topic_playlist = ytmusic.get_playlist("RDEMtjpeRS40g7H8oquOSqkB3g")
-            for track in topic_playlist.get("tracks", []):
-                if "videoId" in track and track["videoId"]:
-                    video_ids.append(track["videoId"])
-        except Exception as e:
-            print(f"Topic playlist lookup warning: {e}")
+        # 2. Extract albums, singles, and expanded sections
+        sections = ["albums", "singles", "videos", "featured"]
+        browse_targets = []
+
+        for section_key in sections:
+            if section_key in artist_info:
+                sec_data = artist_info[section_key]
+                if isinstance(sec_data, dict):
+                    if "browseId" in sec_data and "params" in sec_data:
+                        browse_targets.append((sec_data["browseId"], sec_data["params"]))
+                    elif "results" in sec_data:
+                        for item in sec_data["results"]:
+                            if "browseId" in item:
+                                try:
+                                    album_data = ytmusic.get_album(item["browseId"])
+                                    for track in album_data.get("tracks", []):
+                                        v_id = track.get("videoId")
+                                        if v_id and v_id not in seen:
+                                            seen.add(v_id)
+                                            video_ids.append(v_id)
+                                except Exception:
+                                    continue
+
+        # 3. Pull deep list contents using pagination parameters
+        for browse_id, params in browse_targets:
+            try:
+                full_list = ytmusic.get_artist_albums(browse_id, params)
+                for entry in full_list:
+                    if "browseId" in entry:
+                        album_content = ytmusic.get_album(entry["browseId"])
+                        for track in album_content.get("tracks", []):
+                            v_id = track.get("videoId")
+                            if v_id and v_id not in seen:
+                                seen.add(v_id)
+                                video_ids.append(v_id)
+            except Exception as e:
+                print(f"Section pagination warning: {e}")
+
+    except Exception as e:
+        print(f"Artist profile retrieval warning: {e}")
+
+    # 4. Fallback search bundle to ensure completeness across multi-language tracks
+    if len(video_ids) < 100:
+        print("Running comprehensive search supplement...")
+        fallback_queries = [
+            "Arijit Singh",
+            "Arijit Singh Hindi songs",
+            "Arijit Singh Bengali songs",
+            "Arijit Singh romantic hits"
+        ]
+        for query in fallback_queries:
+            try:
+                results = ytmusic.search(query=query, filter="songs", limit=150)
+                for song in results:
+                    v_id = song.get("videoId")
+                    if v_id and v_id not in seen:
+                        seen.add(v_id)
+                        video_ids.append(v_id)
+            except Exception:
+                pass
 
     return video_ids
 
@@ -130,8 +189,8 @@ def main():
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
 
-    # Fetch Artist Tracks
-    video_ids = fetch_arijit_tracks(ytmusic)
+    # Fetch Catalog
+    video_ids = fetch_all_arijit_tracks(ytmusic)
     print(f"Total tracks retrieved: {len(video_ids)}")
 
     if not video_ids:
