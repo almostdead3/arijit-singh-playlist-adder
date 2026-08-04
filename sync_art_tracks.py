@@ -56,8 +56,8 @@ def main():
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
-    # Pass headers explicitly via the `headers` parameter or `setup` dict
-    headers = {
+    # Form minimal raw header dictionary
+    headers_dict = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.5",
@@ -67,18 +67,10 @@ def main():
         "Cookie": cookie_header
     }
 
+    # Pass headers dictionary directly as raw JSON string content
     try:
-        # Initializing via headers parameter prevents OAuth check triggers
-        ytmusic = YTMusic(headers=json.dumps(headers))
+        ytmusic = YTMusic(auth=json.dumps(headers_dict))
         print("Successfully authenticated with YouTube Music API!")
-    except TypeError:
-        # Fallback for versions expecting dictionary format directly
-        try:
-            ytmusic = YTMusic(headers=headers)
-            print("Successfully authenticated with YouTube Music API (dict format)!")
-        except Exception as e:
-            print(f"Authentication Error: {e}")
-            return
     except Exception as e:
         print(f"Authentication Error: {e}")
         return
