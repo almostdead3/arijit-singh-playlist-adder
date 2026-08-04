@@ -24,11 +24,11 @@ def parse_netscape_cookies(cookies_raw):
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
-        if not line or line.startswith("# "):
-            continue
-
-        if line.startswith("#HttpOnly_"):
-            line = line[len("#HttpOnly_"):]
+        if not line or line.startswith("# ") or line.startswith("#"):
+            if line.startswith("#HttpOnly_"):
+                line = line[len("#HttpOnly_"):]
+            else:
+                continue
 
         parts = line.split("\t")
         if len(parts) >= 7:
@@ -50,6 +50,10 @@ def parse_netscape_cookies(cookies_raw):
                     "path": path,
                     "secure": parts[3].strip().upper() == "TRUE"
                 }
+                
+                # Assign strict URL to prevent Chromium protocol rejection
+                cookie_dict["url"] = f"https://{formatted_domain.lstrip('.')}{path}"
+                
                 try:
                     exp = float(parts[4].strip())
                     if exp > 0:
@@ -80,25 +84,32 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        try:
-            context.add_cookies(cookies)
-            print("Cookies injected successfully!")
-        except Exception as e:
-            print(f"Warning during context.add_cookies: {e}")
-            for c in cookies:
-                try:
-                    context.add_cookies([c])
-                except Exception:
-                    continue
+        # Inject cookies individually with clean error handling
+        added_cookie_count = 0
+        for c in cookies:
+            try:
+                context.add_cookies([c])
+                added_cookie_count += 1
+            except Exception:
+                continue
+        print(f"Successfully injected {added_cookie_count} cookies into browser context.")
 
         page = context.new_page()
 
         print("Navigating to Arijit Singh Topic Songs...")
         page.goto(CHANNEL_URL, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        
+        # Scroll and wait for elements to render
+        try:
+            page.wait_for_selector("a#video-title, a.yt-simple-endpoint", timeout=10000)
+            page.evaluate("window.scrollTo(0, 1000)")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            print(f"Notice: Waiting for initial selectors timed out: {e}")
 
+        # Extract video IDs using multiple fallback selectors
         video_links = page.eval_on_selector_all(
-            "a#video-title",
+            "a[href*='/watch?v=']",
             "elements => elements.map(e => e.href)"
         )
 
@@ -115,7 +126,7 @@ def main():
         print(f"Pending tracks remaining: {len(pending)}")
 
         if not pending:
-            print("All Art Tracks are up to date in playlist!")
+            print("No pending tracks to add.")
             browser.close()
             return
 
@@ -130,7 +141,7 @@ def main():
                 page.wait_for_timeout(2500)
 
                 if page.locator("a[href*='accounts.google.com/ServiceLogin']").is_visible():
-                    print("Error: Cookies expired or invalid login session. Skipping.")
+                    print("Error: Session expired or guest view active. Re-export your cookies.txt file.")
                     break
 
                 page.wait_for_selector("ytd-watch-metadata", timeout=5000)
@@ -150,24 +161,23 @@ def main():
                 save_btn.click()
                 page.wait_for_timeout(2000)
 
-                # Target playlist by its visible name text
                 playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{playlist_name}'), ytd-playlist-add-to-option-renderer:has-text('{playlist_name}')").first
                 
                 if playlist_option.is_visible():
                     playlist_option.click()
-                    print(f"Successfully added {v_id} to playlist '{playlist_name}'.")
+                    print(f"Successfully added {v_id} to '{playlist_name}'.")
                     added_tracks.add(v_id)
                     added_count += 1
                     page.wait_for_timeout(1000)
                 else:
-                    print(f"Could not find playlist matching '{playlist_name}' in Save menu.")
+                    print(f"Could not find playlist named '{playlist_name}' in the Save menu.")
 
             except Exception as e:
-                print(f"Could not process {v_id}: {e}")
+                print(f"Error processing {v_id}: {e}")
                 continue
 
         save_added_tracks(added_tracks)
-        print(f"Run completed. Added {added_count} Art Tracks in this run.")
+        print(f"Batch completed. Successfully added {added_count} Art Tracks.")
         browser.close()
 
 if __name__ == "__main__":
