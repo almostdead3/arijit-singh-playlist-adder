@@ -19,9 +19,31 @@ def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
 
-def parse_netscape_cookies(cookies_raw):
-    """Strict Netscape cookie parser designed to prevent Playwright validation errors."""
+def parse_cookies_flexibly(cookies_raw):
+    """Handles both Netscape format and JSON format cookies robustly."""
     cookies = []
+    cookies_raw = cookies_raw.strip()
+    
+    # Try parsing as JSON first (in case the secret is stored as a JSON array)
+    if cookies_raw.startswith("[") or cookies_raw.startswith("{"):
+        try:
+            data = json.loads(cookies_raw)
+            if isinstance(data, list):
+                for item in data:
+                    if "name" in item and "value" in item and "domain" in item:
+                        cookies.append({
+                            "name": item["name"],
+                            "value": item["value"],
+                            "domain": item["domain"] if item["domain"].startswith(".") else f".{item['domain']}",
+                            "path": item.get("path", "/"),
+                            "secure": bool(item.get("secure", True))
+                        })
+                print(f"Successfully parsed {len(cookies)} cookies from JSON format.")
+                return cookies
+        except Exception as e:
+            print(f"JSON cookie parse attempt failed: {e}")
+
+    # Fallback to Netscape format parsing
     for line in cookies_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("!"):
@@ -44,10 +66,8 @@ def parse_netscape_cookies(cookies_raw):
             if not name or not value:
                 continue
 
-            # Playwright requires domains starting with a dot
             formatted_domain = domain if domain.startswith(".") else f".{domain}"
 
-            # Only include the essential fields that Playwright accepts safely
             cookie_dict = {
                 "name": name,
                 "value": value,
@@ -64,6 +84,7 @@ def parse_netscape_cookies(cookies_raw):
                 pass
 
             cookies.append(cookie_dict)
+            
     return cookies
 
 def main():
@@ -75,8 +96,8 @@ def main():
         return
 
     added_tracks = load_added_tracks()
-    cookies = parse_netscape_cookies(cookies_raw)
-    print(f"Parsed {len(cookies)} clean YouTube cookies for Playwright injection.")
+    cookies = parse_cookies_flexibly(cookies_raw)
+    print(f"Total valid cookies ready for injection: {len(cookies)}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -85,13 +106,13 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        # Inject cookies individually to gracefully bypass any single malformed cookie entry
         added_cookie_count = 0
         for c in cookies:
             try:
                 context.add_cookies([c])
                 added_cookie_count += 1
-            except Exception:
+            except Exception as ex:
+                print(f"Failed cookie ({c.get('name')}): {ex}")
                 continue
         print(f"Successfully injected {added_cookie_count} cookies into browser context.")
 
