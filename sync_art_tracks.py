@@ -93,12 +93,15 @@ def main():
         if os.path.exists(temp_auth_path):
             os.remove(temp_auth_path)
 
-    # Fetch User Playlists
+    # Fetch User Playlists (Using updated library call)
     try:
-        playlists = ytmusic.get_user_playlists()
+        playlists = ytmusic.get_library_playlists(limit=None)
     except Exception as e:
-        print(f"Error fetching user playlists: {e}")
-        return
+        try:
+            playlists = ytmusic.get_user_playlists()
+        except Exception as inner_e:
+            print(f"Error fetching user playlists: {e} | Fallback Error: {inner_e}")
+            return
 
     target_playlist_id = None
     for pl in playlists:
