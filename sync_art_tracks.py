@@ -24,11 +24,11 @@ def parse_netscape_cookies(cookies_raw):
     cookies = []
     for line in cookies_raw.splitlines():
         line = line.strip()
-        if not line or line.startswith("# ") or line.startswith("#"):
-            if line.startswith("#HttpOnly_"):
-                line = line[len("#HttpOnly_"):]
-            else:
-                continue
+        if not line or line.startswith("# ") or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
 
         parts = line.split("\t")
         if len(parts) >= 7:
@@ -50,9 +50,6 @@ def parse_netscape_cookies(cookies_raw):
                     "path": path,
                     "secure": parts[3].strip().upper() == "TRUE"
                 }
-                
-                # Assign strict URL to prevent Chromium protocol rejection
-                cookie_dict["url"] = f"https://{formatted_domain.lstrip('.')}{path}"
                 
                 try:
                     exp = float(parts[4].strip())
@@ -84,22 +81,27 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        # Inject cookies individually with clean error handling
-        added_cookie_count = 0
-        for c in cookies:
+        # Inject cookies cleanly
+        if cookies:
             try:
-                context.add_cookies([c])
-                added_cookie_count += 1
-            except Exception:
-                continue
-        print(f"Successfully injected {added_cookie_count} cookies into browser context.")
+                context.add_cookies(cookies)
+                print(f"Successfully injected {len(cookies)} cookies into browser context.")
+            except Exception as e:
+                print(f"Batch injection failed ({e}). Attempting individual injection...")
+                added_cookie_count = 0
+                for c in cookies:
+                    try:
+                        context.add_cookies([c])
+                        added_cookie_count += 1
+                    except Exception:
+                        continue
+                print(f"Successfully injected {added_cookie_count} cookies into browser context.")
 
         page = context.new_page()
 
         print("Navigating to Arijit Singh Topic Songs...")
         page.goto(CHANNEL_URL, wait_until="domcontentloaded")
         
-        # Scroll and wait for elements to render
         try:
             page.wait_for_selector("a#video-title, a.yt-simple-endpoint", timeout=10000)
             page.evaluate("window.scrollTo(0, 1000)")
@@ -107,7 +109,6 @@ def main():
         except Exception as e:
             print(f"Notice: Waiting for initial selectors timed out: {e}")
 
-        # Extract video IDs using multiple fallback selectors
         video_links = page.eval_on_selector_all(
             "a[href*='/watch?v=']",
             "elements => elements.map(e => e.href)"
@@ -140,7 +141,9 @@ def main():
                 page.goto(video_url, wait_until="domcontentloaded")
                 page.wait_for_timeout(2500)
 
-                if page.locator("a[href*='accounts.google.com/ServiceLogin']").is_visible():
+                # Fixed strict mode violation by specifying .first
+                signin_btn = page.locator("a[href*='accounts.google.com/ServiceLogin']").first
+                if signin_btn.is_visible():
                     print("Error: Session expired or guest view active. Re-export your cookies.txt file.")
                     break
 
