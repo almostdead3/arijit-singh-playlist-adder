@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
 CHANNEL_URL = "https://www.youtube.com/channel/UCtjpeRS40g7H8oquOSqkB3g/songs"  # Arijit Singh - Topic Songs
-BATCH_LIMIT = 50  # Adds 50 songs per daily execution
+BATCH_LIMIT = 50  # Adds 50 songs per run
 
 def load_added_tracks():
     if os.path.exists(STATE_FILE):
@@ -17,6 +17,39 @@ def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
 
+def parse_netscape_cookies(cookies_raw):
+    """Parses Netscape cookie strings cleanly into Playwright-compatible dicts."""
+    cookies = []
+    for line in cookies_raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("# "):
+            continue
+
+        # Handle #HttpOnly_ lines
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domain = parts[0].strip()
+            # Playwright requires domains to not have leading dots in some protocol versions
+            if domain.startswith("."):
+                domain = domain[1:]
+
+            cookie_dict = {
+                "name": parts[5].strip(),
+                "value": parts[6].strip(),
+                "domain": domain,
+                "path": parts[1].strip() or "/",
+                "secure": parts[3].strip().upper() == "TRUE"
+            }
+            
+            # Skip empty or malformed entries
+            if cookie_dict["name"] and cookie_dict["value"]:
+                cookies.append(cookie_dict)
+                
+    return cookies
+
 def main():
     playlist_id = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
@@ -26,27 +59,15 @@ def main():
         return
 
     added_tracks = load_added_tracks()
+    cookies = parse_netscape_cookies(cookies_raw)
 
-    # Convert netscape formatted cookies string to list of dicts for Playwright
-    cookies = []
-    for line in cookies_raw.splitlines():
-        if line.startswith("#") or not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) >= 7:
-            cookies.append({
-                "name": parts[5],
-                "value": parts[6],
-                "domain": parts[0],
-                "path": parts[1],
-                "secure": parts[3].upper() == "TRUE"
-            })
+    print(f"Parsed {len(cookies)} valid cookies.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1280, 'height': 800})
         
-        # Inject YouTube cookies
+        # Inject cleaned cookies
         context.add_cookies(cookies)
         page = context.new_page()
 
@@ -95,7 +116,7 @@ def main():
                 page.click("button[aria-label*='Save to playlist']")
                 time.sleep(1.5)
 
-                # Select your playlist by ID matching
+                # Select target playlist
                 page.click(f"tp-yt-paper-checkbox:has-text('{playlist_id}')")
                 time.sleep(1)
 
