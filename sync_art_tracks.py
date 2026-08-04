@@ -48,7 +48,7 @@ def fetch_arijit_tracks(ytmusic):
 
     # Method 1: Search specifically for songs by Arijit Singh
     try:
-        search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=40)
+        search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=100)
         for song in search_results:
             if isinstance(song, dict) and "videoId" in song and song["videoId"]:
                 video_ids.append(song["videoId"])
@@ -58,7 +58,6 @@ def fetch_arijit_tracks(ytmusic):
     # Method 2: Direct lookup via YouTube Music Top Tracks topic playlist for Arijit Singh
     if not video_ids:
         try:
-            # Top tracks playlist for Arijit Singh
             topic_playlist = ytmusic.get_playlist("RDEMtjpeRS40g7H8oquOSqkB3g")
             for track in topic_playlist.get("tracks", []):
                 if "videoId" in track and track["videoId"]:
@@ -131,7 +130,7 @@ def main():
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
 
-    # Fetch Artist Tracks without calling get_artist
+    # Fetch Artist Tracks
     video_ids = fetch_arijit_tracks(ytmusic)
     print(f"Total tracks retrieved: {len(video_ids)}")
 
@@ -151,14 +150,32 @@ def main():
     
     # Add items to playlist
     try:
-        response = ytmusic.add_playlist_items(target_playlist_id, batch)
-        print("API Response status:", response.get("status", "Success"))
+        response = ytmusic.add_playlist_items(target_playlist_id, batch, duplicates=True)
+        status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
+        print("API Batch Response status:", status)
         
-        for v_id in batch:
-            added_tracks.add(v_id)
+        if status == "STATUS_FAILED":
+            print("Batch rejected by API! Attempting fallback: adding tracks individually...")
+            added_count = 0
+            for v_id in batch:
+                try:
+                    res = ytmusic.add_playlist_items(target_playlist_id, [v_id], duplicates=True)
+                    item_status = res.get("status", "Unknown") if isinstance(res, dict) else "STATUS_SUCCEEDED"
+                    if item_status != "STATUS_FAILED":
+                        added_tracks.add(v_id)
+                        added_count += 1
+                except Exception as item_e:
+                    print(f"Failed to add track {v_id}: {item_e}")
             
-        save_added_tracks(added_tracks)
-        print(f"Successfully added {len(batch)} tracks to '{target_playlist_name}'!")
+            save_added_tracks(added_tracks)
+            print(f"Fallback complete: Successfully added {added_count} tracks individually to '{target_playlist_name}'!")
+        else:
+            for v_id in batch:
+                added_tracks.add(v_id)
+                
+            save_added_tracks(added_tracks)
+            print(f"Successfully added {len(batch)} tracks to '{target_playlist_name}'!")
+
     except Exception as e:
         print(f"Error adding tracks to playlist: {e}")
 
