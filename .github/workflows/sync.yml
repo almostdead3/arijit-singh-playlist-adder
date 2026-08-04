@@ -8,7 +8,6 @@ on:
 jobs:
   build-and-sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -21,7 +20,8 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ytmusicapi
+          pip install ytmusicapi playwright
+          playwright install chromium
 
       - name: Run Sync Script
         env:
@@ -34,10 +34,10 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          
+                    
           touch added_tracks.json
           git add added_tracks.json
-          
+                    
           if git diff --staged --quiet; then
             echo "No new tracks added. Skipping commit."
           else
