@@ -1,5 +1,6 @@
 import os
 import json
+import tempfile
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
@@ -56,30 +57,35 @@ def main():
         print("Error: Could not extract valid cookies from YT_COOKIES.")
         return
 
+    # Generate proper browser headers for YTMusic setup
+    headers_raw = f"""User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Content-Type: application/json
+X-Goog-AuthUser: 0
+x-origin: https://music.youtube.com
+Cookie: {cookie_header}"""
+
+    # Write temporary browser headers via YTMusic setup parser
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as tmp:
+        temp_auth_path = tmp.name
+
     try:
-        # Initialize an unauthenticated instance first
-        ytmusic = YTMusic()
-        
-        # Inject user headers & cookies directly into the session
-        ytmusic.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Content-Type": "application/json",
-            "X-Goog-AuthUser": "0",
-            "x-origin": "https://music.youtube.com",
-            "Cookie": cookie_header
-        })
-        print("Successfully attached authentication cookies to session!")
+        YTMusic.setup(filepath=temp_auth_path, headers=headers_raw)
+        ytmusic = YTMusic(temp_auth_path)
+        print("Successfully authenticated with YouTube Music API!")
     except Exception as e:
-        print(f"Authentication Setup Error: {e}")
+        print(f"Authentication Error: {e}")
         return
+    finally:
+        if os.path.exists(temp_auth_path):
+            os.remove(temp_auth_path)
 
     # Fetch User Playlists
     try:
         playlists = ytmusic.get_user_playlists()
     except Exception as e:
-        print(f"Error fetching user playlists (cookies may be expired): {e}")
+        print(f"Error fetching user playlists: {e}")
         return
 
     target_playlist_id = None
