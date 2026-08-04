@@ -2,12 +2,13 @@ name: Sync Arijit Singh Art Tracks
 
 on:
   schedule:
-    - cron: '0 0 * * *' 
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
-  sync:
+  build-and-sync:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -17,21 +18,31 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies & Playwright
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install playwright
-          playwright install chromium --with-deps
+          playwright install chromium
 
-      - name: Execute Sync Script
+      - name: Run Sync Script
         env:
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
           PLAYLIST_ID: ${{ secrets.PLAYLIST_ID }}
-        run: python sync_art_tracks.py
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          python sync_art_tracks.py
 
-      - name: Save Execution Progress
+      - name: Commit and Push State File
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          touch added_tracks.json
+          
           git add added_tracks.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update added_tracks.json progress" && git push)
+          
+          if git diff --staged --quiet; then
+            echo "No new tracks added. Skipping commit."
+          else
+            git commit -m "Update added_tracks.json [skip ci]"
+            git push
+          fi
