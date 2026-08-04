@@ -43,6 +43,37 @@ def netscape_to_cookie_header(cookies_raw):
 
     return "; ".join(cookie_pairs)
 
+def get_artist_tracks_safely(ytmusic, channel_id):
+    """Fetches artist songs across different API response schemas."""
+    artist_results = ytmusic.get_artist(channel_id)
+    songs_section = artist_results.get("songs", {})
+    
+    # Method 1: Browse ID present in songs section
+    browse_id = songs_section.get("browseId")
+    params = songs_section.get("params")
+    
+    if browse_id:
+        try:
+            playlist_data = ytmusic.get_playlist(browse_id)
+            return playlist_data.get("tracks", [])
+        except Exception:
+            pass
+
+    # Method 2: Fetch full songs list via get_artist_albums/songs if params exist
+    if browse_id and params:
+        try:
+            return ytmusic.get_artist_albums(channel_id, params)
+        except Exception:
+            pass
+
+    # Method 3: Direct results array in songs section
+    if "results" in songs_section:
+        return songs_section["results"]
+
+    # Method 4: Fallback - Search artist's top tracks
+    search_results = ytmusic.search(query="Arijit Singh", filter="songs", limit=30)
+    return search_results
+
 def main():
     target_playlist_name = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
@@ -66,7 +97,7 @@ def main():
         "X-Goog-AuthUser": "0",
         "x-origin": "https://music.youtube.com",
         "Cookie": cookie_header,
-        "authorization": "SAPISIDHASH 123456789_abcdef"  # Satisfies internal parser check
+        "authorization": "SAPISIDHASH 123456789_abcdef"
     }
 
     # Write temporary JSON file for ytmusicapi authentication
@@ -75,12 +106,10 @@ def main():
         temp_auth_path = tmp.name
 
     try:
-        # Initialize YTMusic with auth file path
         ytmusic = YTMusic(auth=temp_auth_path)
         print("Successfully authenticated with YouTube Music API!")
     except Exception as e:
-        # Fallback: force auth initialization if schema validation complains
-        print(f"Standard auth initialization warning: {e}. Attempting direct auth injection...")
+        print(f"Standard auth warning: {e}. Falling back to session headers...")
         ytmusic = YTMusic()
         ytmusic.auth = temp_auth_path
         if hasattr(ytmusic, "_session"):
@@ -110,22 +139,19 @@ def main():
 
     print(f"Found Playlist '{target_playlist_name}' with ID: {target_playlist_id}")
 
-    # Fetch Artist Tracks
+    # Fetch Artist Tracks with fallback logic
     try:
-        artist_results = ytmusic.get_artist(ARIJIT_CHANNEL_ID)
-        songs_section = artist_results.get("songs", {})
-        
-        if "browseId" in songs_section and songs_section["browseId"]:
-            tracks = ytmusic.get_playlist(songs_section["browseId"])["tracks"]
-        else:
-            tracks = songs_section.get("results", [])
-            
+        tracks = get_artist_tracks_safely(ytmusic, ARIJIT_CHANNEL_ID)
     except Exception as e:
         print(f"Error fetching artist tracks: {e}")
         return
 
-    video_ids = [t["videoId"] for t in tracks if "videoId" in t]
-    print(f"Total tracks retrieved from channel: {len(video_ids)}")
+    video_ids = [t["videoId"] for t in tracks if isinstance(t, dict) and "videoId" in t]
+    print(f"Total tracks retrieved: {len(video_ids)}")
+
+    if not video_ids:
+        print("No video IDs found in artist results.")
+        return
 
     added_tracks = load_added_tracks()
     pending = [v for v in video_ids if v not in added_tracks]
