@@ -1,7 +1,6 @@
 import os
 import json
-import tempfile
-from ytmusicapi import YTMusic
+import random
 from playwright.sync_api import sync_playwright
 
 STATE_FILE = "added_tracks.json"
@@ -20,25 +19,6 @@ def load_added_tracks():
 def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
-
-def netscape_to_cookie_header(cookies_raw):
-    """Converts raw Netscape cookies into a Cookie header string for ytmusicapi."""
-    cookie_pairs = []
-    for line in cookies_raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("# ") or (line.startswith("#") and not line.startswith("#HttpOnly_")):
-            continue
-        if line.startswith("#HttpOnly_"):
-            line = line[len("#HttpOnly_"):]
-        parts = line.split("\t")
-        if len(parts) >= 7:
-            domain = parts[0].strip()
-            name = parts[5].strip()
-            value = parts[6].strip()
-            if "youtube.com" in domain or "google.com" in domain:
-                if name and value:
-                    cookie_pairs.append(f"{name}={value}")
-    return "; ".join(cookie_pairs)
 
 def extract_cookie_pairs(cookies_raw):
     """Extracts name=value pairs for Playwright DOM injection."""
@@ -79,41 +59,11 @@ def main():
         print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
         return
 
-    # 1. Initialize ytmusicapi for seamless playlist additions later
-    cookie_header = netscape_to_cookie_header(cookies_raw)
-    browser_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Content-Type": "application/json",
-        "X-Goog-AuthUser": "0",
-        "x-origin": "https://music.youtube.com",
-        "Cookie": cookie_header,
-        "authorization": "SAPISIDHASH 123456789_abcdef"
-    }
-
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as tmp:
-        json.dump(browser_headers, tmp)
-        temp_auth_path = tmp.name
-
-    try:
-        ytmusic = YTMusic(auth=temp_auth_path)
-    except Exception:
-        ytmusic = YTMusic()
-        ytmusic.auth = temp_auth_path
-        if hasattr(ytmusic, "_session"):
-            ytmusic._session.headers.update(browser_headers)
-        elif hasattr(ytmusic, "session"):
-            ytmusic.session.headers.update(browser_headers)
-    finally:
-        if os.path.exists(temp_auth_path):
-            os.remove(temp_auth_path)
-
     added_tracks = load_added_tracks()
     cookie_pairs = extract_cookie_pairs(cookies_raw)
 
-    # 2. Use Playwright to scrape releases and verify Art Tracks via descriptions
-    verified_video_ids = []
+    added_count = 0
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -171,16 +121,17 @@ def main():
         for i, v_id in enumerate(batch):
             try:
                 video_url = f"https://www.youtube.com/watch?v={v_id}"
-                print(f"[{i + 1}/{len(batch)}] Inspecting track: {v_id}")
+                print(f"[{i + 1}/{len(batch)}] Inspecting and adding track: {v_id}")
                 page.goto(video_url, wait_until="domcontentloaded")
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(random.randint(2000, 3500))
 
                 signin_btn = page.locator("a[href*='accounts.google.com/ServiceLogin']").first
                 if signin_btn.is_visible():
-                    print("Session expired or guest view active on track check, continuing...")
+                    print("Session throttled, pausing briefly...")
+                    page.wait_for_timeout(5000)
                     continue
 
-                page.wait_for_selector("ytd-watch-metadata", timeout=4000)
+                page.wait_for_selector("ytd-watch-metadata", timeout=5000)
                 description = page.inner_text("ytd-watch-metadata")
                 
                 # Strict Art Track Check
@@ -188,46 +139,36 @@ def main():
                     print(f"Skipping {v_id}: Not identified as an official Art Track (likely a music video).")
                     continue
 
-                print(f"Verified official Art Track: {v_id}")
-                verified_video_ids.append(v_id)
+                # Click Save / Playlist button in the browser UI
+                save_btn = page.locator("button[aria-label*='Save to playlist'], button[aria-label*='Save']").first
+                if not save_btn.is_visible():
+                    more_btn = page.locator("button[aria-label='More actions']").first
+                    if more_btn.is_visible():
+                        more_btn.click()
+                        page.wait_for_timeout(1000)
 
-            except Exception as e:
-                print(f"Error inspecting track {v_id}: {e}")
-                continue
+                save_btn.click()
+                page.wait_for_timeout(1500)
 
-        browser.close()
-
-    if not verified_video_ids:
-        print("No new verified Art Tracks found to add.")
-        return
-
-    # 3. Add verified Art Tracks to the playlist using ytmusicapi
-    print(f"Adding {len(verified_video_ids)} verified Art Tracks to playlist {playlist_id} via API...")
-    try:
-        response = ytmusic.add_playlist_items(playlist_id, verified_video_ids, duplicates=False)
-        status = response.get("status", "Unknown") if isinstance(response, dict) else "STATUS_SUCCEEDED"
-        print("API Batch Response status:", status)
-
-        for v_id in verified_video_ids:
-            added_tracks.add(v_id)
-        save_added_tracks(added_tracks)
-        print(f"Successfully added {len(verified_video_ids)} verified Art Tracks to your playlist!")
-
-    except Exception as e:
-        print(f"Batch API add failed ({e}). Adding individually...")
-        added_count = 0
-        for v_id in verified_video_ids:
-            try:
-                res = ytmusic.add_playlist_items(playlist_id, [v_id], duplicates=False)
-                item_status = res.get("status", "Unknown") if isinstance(res, dict) else "STATUS_SUCCEEDED"
-                if item_status != "STATUS_FAILED":
+                # Select the playlist checkbox or item
+                playlist_option = page.locator(f"tp-yt-paper-checkbox:has-text('{playlist_id}'), ytd-playlist-add-to-option-renderer:has-text('{playlist_id}')").first
+                
+                if playlist_option.is_visible():
+                    playlist_option.click()
+                    print(f"Successfully added official Art Track {v_id} to playlist.")
                     added_tracks.add(v_id)
                     added_count += 1
-            except Exception as item_e:
-                print(f"Failed to add track {v_id}: {item_e}")
-        
+                    page.wait_for_timeout(1000)
+                else:
+                    print(f"Could not locate playlist identifier in the menu popup.")
+
+            except Exception as e:
+                print(f"Error processing track {v_id}: {e}")
+                continue
+
         save_added_tracks(added_tracks)
-        print(f"Individual fallback complete: Successfully added {added_count} tracks!")
+        print(f"Batch completed. Successfully verified and added {added_count} official Art Tracks to your playlist!")
+        browser.close()
 
 if __name__ == "__main__":
     main()
