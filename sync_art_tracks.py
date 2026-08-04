@@ -3,7 +3,6 @@ import json
 from ytmusicapi import YTMusic
 
 STATE_FILE = "added_tracks.json"
-# Official Arijit Singh - Topic Channel ID
 ARIJIT_CHANNEL_ID = "UCtjpeRS40g7H8oquOSqkB3g"
 BATCH_LIMIT = 20
 
@@ -20,6 +19,29 @@ def save_added_tracks(added_set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(added_set), f, indent=2)
 
+def netscape_to_cookie_header(cookies_raw):
+    """Converts raw Netscape cookies into a Cookie header string for ytmusicapi."""
+    cookie_pairs = []
+    for line in cookies_raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("# ") or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domain = parts[0].strip()
+            name = parts[5].strip()
+            value = parts[6].strip()
+
+            if "youtube.com" in domain or "google.com" in domain:
+                if name and value:
+                    cookie_pairs.append(f"{name}={value}")
+
+    return "; ".join(cookie_pairs)
+
 def main():
     target_playlist_name = os.environ.get("PLAYLIST_ID")
     cookies_raw = os.environ.get("YT_COOKIES")
@@ -28,25 +50,38 @@ def main():
         print("Error: Missing PLAYLIST_ID or YT_COOKIES environment variables.")
         return
 
-    # Write cookies_raw temporarily for ytmusicapi initialization
-    with open("cookie_file.txt", "w") as f:
-        f.write(cookies_raw)
+    # Convert Netscape format to Cookie header string
+    cookie_header = netscape_to_cookie_header(cookies_raw)
+
+    if not cookie_header:
+        print("Error: Could not extract valid cookies from YT_COOKIES.")
+        return
 
     try:
-        # Initialize YTMusic with Netscape cookies file directly
-        ytmusic = YTMusic("cookie_file.txt")
+        # Pass headers dict with cookie string to YTMusic
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie": cookie_header
+        }
+        ytmusic = YTMusic(auth=json.dumps(headers))
         print("Successfully authenticated with YouTube Music API!")
+    except Exception:
+        # Fallback to direct raw string if JSON setup fails
+        try:
+            ytmusic = YTMusic(auth=cookie_header)
+            print("Successfully authenticated via direct cookie header!")
+        except Exception as e:
+            print(f"Authentication Error: {e}")
+            return
+
+    # Fetch User Playlists
+    try:
+        playlists = ytmusic.get_user_playlists()
     except Exception as e:
-        print(f"Authentication Error: {e}")
+        print(f"Error fetching user playlists (Check if cookies are valid): {e}")
         return
-    finally:
-        if os.path.exists("cookie_file.txt"):
-            os.remove("cookie_file.txt")
 
-    # Locate Target Playlist ID by Name
-    playlists = ytmusic.get_user_playlists()
     target_playlist_id = None
-
     for pl in playlists:
         if pl.get("title") == target_playlist_name:
             target_playlist_id = pl.get("playlistId")
@@ -63,7 +98,6 @@ def main():
         artist_results = ytmusic.get_artist(ARIJIT_CHANNEL_ID)
         songs_section = artist_results.get("songs", {})
         
-        # Get full track list if browseId is available
         if "browseId" in songs_section and songs_section["browseId"]:
             tracks = ytmusic.get_playlist(songs_section["browseId"])["tracks"]
         else:
@@ -86,10 +120,10 @@ def main():
 
     batch = pending[:BATCH_LIMIT]
     
-    # Add tracks directly via API
+    # Add items to playlist
     try:
         response = ytmusic.add_playlist_items(target_playlist_id, batch)
-        print("API Response:", response)
+        print("API Response status:", response.get("status", "Success"))
         
         for v_id in batch:
             added_tracks.add(v_id)
