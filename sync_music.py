@@ -1,11 +1,12 @@
 import os
+from ytmusicapi import YTMusic
 
 def main():
     if not os.path.exists("cookies.txt"):
         print("Error: cookies.txt was not generated from secret.")
         return
 
-    # Parse cookies.txt to extract key-value pairs
+    # Parse cookies.txt to format into raw headers string expected by ytmusicapi
     try:
         cookies = {}
         with open("cookies.txt", "r") as f:
@@ -18,41 +19,23 @@ def main():
         
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookies.items()])
         
-        # Construct the exact headers required so ytmusicapi accepts it as browser auth
-        # Including a dummy/placeholder or standard browser authorization structure if needed, 
-        # or utilizing the raw format strings.
-        import json
-        browser_data = [
-            {
-                "name": "cookie",
-                "value": cookie_string
-            }
-        ]
-        
-        # Alternatively, write a standard dictionary format that ytmusicapi parses for browser auth:
-        browser_config = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Content-Type": "application/json",
-            "X-Goog-AuthUser": "0",
-            "Cookie": cookie_string,
-            "authorization": "SAPISIDHASH " # satisfies ytmusicapi browser check if required, or we can use the direct dictionary format
-        }
-        
-        # Let's write out a valid JSON file structure that matches browser auth expectations:
-        with open("browser.json", "w") as outfile:
-            json.dump({
-                "cookie": cookie_string,
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }, outfile, indent=2)
-            
-        print("Successfully generated browser.json configuration!")
+        # Build raw text headers matching what ytmusicapi parses natively
+        raw_headers = f"""accept: */*
+accept-encoding: gzip, deflate, br
+accept-language: en-US,en;q=0.9
+content-type: application/json
+cookie: {cookie_string}
+user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+x-goog-authuser: 0
+x-origin: https://music.youtube.com"""
+
+        # Generate browser.json natively using ytmusicapi setup function
+        YTMusic.setup(filepath="browser.json", headers_raw=raw_headers)
+        print("Successfully generated browser.json via raw headers!")
     except Exception as e:
         print(f"Error building browser.json: {e}")
         return
 
-    from ytmusicapi import YTMusic
     yt = YTMusic("browser.json")
     playlist_id = os.environ.get("PLAYLIST_ID")
 
