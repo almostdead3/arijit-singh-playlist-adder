@@ -6,6 +6,7 @@ def main():
         print("Error: browser.json was not generated.")
         return
         
+    # Explicitly pass auth="browser.json" to prevent it from looking for OAuth tokens
     yt = YTMusic("browser.json")
     playlist_id = os.environ.get("PLAYLIST_ID")
 
@@ -67,7 +68,6 @@ def main():
 
     print("Adding every single missing song to your playlist now...")
     try:
-        # Pushing all pending tracks directly in one go
         response = yt.add_playlist_items(playlist_id, pending_ids)
         print(f"Success! All {len(pending_ids)} songs have been added.")
     except Exception as e:
