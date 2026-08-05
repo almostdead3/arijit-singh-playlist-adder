@@ -1,12 +1,11 @@
 import os
-import json
 
 def main():
     if not os.path.exists("cookies.txt"):
         print("Error: cookies.txt was not generated from secret.")
         return
 
-    # Parse cookies.txt and format them into the exact browser.json layout
+    # Parse cookies.txt to extract key-value pairs
     try:
         cookies = {}
         with open("cookies.txt", "r") as f:
@@ -19,20 +18,36 @@ def main():
         
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookies.items()])
         
-        browser_data = {
+        # Construct the exact headers required so ytmusicapi accepts it as browser auth
+        # Including a dummy/placeholder or standard browser authorization structure if needed, 
+        # or utilizing the raw format strings.
+        import json
+        browser_data = [
+            {
+                "name": "cookie",
+                "value": cookie_string
+            }
+        ]
+        
+        # Alternatively, write a standard dictionary format that ytmusicapi parses for browser auth:
+        browser_config = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
             "Content-Type": "application/json",
             "X-Goog-AuthUser": "0",
-            "x-origin": "https://music.youtube.com",
-            "Cookie": cookie_string
+            "Cookie": cookie_string,
+            "authorization": "SAPISIDHASH " # satisfies ytmusicapi browser check if required, or we can use the direct dictionary format
         }
-
+        
+        # Let's write out a valid JSON file structure that matches browser auth expectations:
         with open("browser.json", "w") as outfile:
-            json.dump(browser_data, outfile, indent=2)
+            json.dump({
+                "cookie": cookie_string,
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }, outfile, indent=2)
             
-        print("Successfully generated browser.json layout!")
+        print("Successfully generated browser.json configuration!")
     except Exception as e:
         print(f"Error building browser.json: {e}")
         return
