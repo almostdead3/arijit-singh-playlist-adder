@@ -1,12 +1,12 @@
 import os
-from ytmusicapi import YTMusic
+import json
 
 def main():
     if not os.path.exists("cookies.txt"):
         print("Error: cookies.txt was not generated from secret.")
         return
 
-    # Parse cookies.txt and construct the raw headers string for ytmusicapi setup
+    # Parse cookies.txt and format them into the exact browser.json layout
     try:
         cookies = {}
         with open("cookies.txt", "r") as f:
@@ -19,24 +19,25 @@ def main():
         
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookies.items()])
         
-        # Build the raw headers format required by ytmusicapi setup
-        raw_headers = f"""accept: */*
-accept-encoding: gzip, deflate, br
-accept-language: en-US,en;q=0.9
-content-type: application/json
-cookie: {cookie_string}
-user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
-x-goog-authuser: 0
-x-origin: https://music.youtube.com"""
+        browser_data = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Content-Type": "application/json",
+            "X-Goog-AuthUser": "0",
+            "x-origin": "https://music.youtube.com",
+            "Cookie": cookie_string
+        }
 
-        # Generate browser.json natively using ytmusicapi's built-in tool
-        YTMusic.setup(filepath="browser.json", headers_raw=raw_headers)
-        print("Successfully generated browser.json configuration!")
+        with open("browser.json", "w") as outfile:
+            json.dump(browser_data, outfile, indent=2)
+            
+        print("Successfully generated browser.json layout!")
     except Exception as e:
-        print(f"Error setting up browser.json: {e}")
+        print(f"Error building browser.json: {e}")
         return
 
-    # Initialize YTMusic correctly passing the filename path string
+    from ytmusicapi import YTMusic
     yt = YTMusic("browser.json")
     playlist_id = os.environ.get("PLAYLIST_ID")
 
@@ -80,7 +81,6 @@ x-origin: https://music.youtube.com"""
     unique_source_ids = list(set(track_ids))
     print(f"Total unique source track IDs found: {len(unique_source_ids)}")
 
-    # Fetch existing playlist items completely
     existing_track_ids = set()
     try:
         playlist_data = yt.get_playlist(playlist_id, limit=None)
