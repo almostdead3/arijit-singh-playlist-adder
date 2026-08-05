@@ -1,4 +1,5 @@
 import os
+import json
 from ytmusicapi import YTMusic
 
 def main():
@@ -6,8 +7,11 @@ def main():
         print("Error: browser.json was not generated.")
         return
         
-    # Explicitly pass auth="browser.json" to prevent it from looking for OAuth tokens
-    yt = YTMusic("browser.json")
+    # Explicitly load the JSON headers and pass them into YTMusic as headers=
+    with open("browser.json", "r") as f:
+        headers = json.load(f)
+    
+    yt = YTMusic(headers=headers)
     playlist_id = os.environ.get("PLAYLIST_ID")
 
     if not playlist_id:
